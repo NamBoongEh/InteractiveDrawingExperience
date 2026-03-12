@@ -1,0 +1,10 @@
+{
+  "wallIP": "192.168.0.2",
+  "wallPort": 11116,
+  "ftpHost": "192.168.0.32",
+  "ftpPort": 21,
+  "ftpUser": "ftpuser",
+  "ftpPassword": "1234",
+  "backgroundThreshold": 120,
+  "ResetTime": 120.0
+}

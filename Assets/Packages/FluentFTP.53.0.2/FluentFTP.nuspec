@@ -1,0 +1,26 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd">
+  <metadata>
+    <id>FluentFTP</id>
+    <version>53.0.2</version>
+    <title>FluentFTP</title>
+    <authors>Robin Rodricks, FluentFTP Contributors</authors>
+    <license type="expression">MIT</license>
+    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>
+    <icon>logo-nuget.png</icon>
+    <projectUrl>https://github.com/robinrodricks/FluentFTP</projectUrl>
+    <description>An FTP and FTPS client for .NET &amp; .NET Standard, optimized for speed. Provides extensive FTP commands, File uploads/downloads, SSL/TLS connections, Directory listing parsing, File hashing/checksums, File permissions/CHMOD, FTP proxies, FXP transfers, UTF-8 support, Async/await support, Powershell support and more. Written entirely in C#, with no external dependencies.</description>
+    <copyright>Copyright (c) 2015 Robin Rodricks, Michael Stiemke and FluentFTP Contributors</copyright>
+    <tags>ftp,ftp-client,ftps,ftps-client,ssl,tls,unix,iis,ftp-proxy</tags>
+    <repository type="git" url="https://github.com/robinrodricks/FluentFTP" commit="074f222240ad8e1db7768697db0a4d0a6c3a92cf" />
+    <dependencies>
+      <group targetFramework=".NETFramework4.6.2" />
+      <group targetFramework=".NETFramework4.7.2" />
+      <group targetFramework="net7.0" />
+      <group targetFramework="net8.0" />
+      <group targetFramework="net9.0" />
+      <group targetFramework=".NETStandard2.0" />
+      <group targetFramework=".NETStandard2.1" />
+    </dependencies>
+  </metadata>
+</package>
