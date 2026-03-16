@@ -17,12 +17,16 @@ public class ArucoDetector : MonoBehaviour
     public UnityEngine.UI.RawImage overlayView;
     public UnityEngine.UI.Text failureText; // 생성 실패 시 안내 문구
 
+    [Header("Fish Mask Settings")]
+    public Texture2D fishMaskSource;          // Inspector에서 할당 or Resources/Fish/fish0 자동 로드
+
     public event Action<Texture2D, int> OnAllMarkersDetected;
 
     private WebCamCapture cam;
     private ArucoDict arucoDict;
     private DetectorParameters detParams;
     private float holdTimer = 0f;
+    private Mat _cachedFishMask;
 
     // ── 초기화 ────────────────────────────────────────────────
     void Start()
@@ -32,6 +36,14 @@ public class ArucoDetector : MonoBehaviour
         detParams = DetectorParameters.Create();
         SetFailureMessage(null);
 
+        if (fishMaskSource == null)
+        {
+            fishMaskSource = Resources.Load<Texture2D>("Fish/fish0");
+            if (fishMaskSource == null)
+                Debug.LogWarning("[ArucoDetector] Fish/fish0 텍스처를 Resources에서 찾을 수 없습니다.");
+            else
+                Debug.Log("[ArucoDetector] Fish/fish0 텍스처 자동 로드 완료.");
+        }
     }
 
     // ── 종료 시 UI 텍스처·캐시 정리 ─────────────────────────
@@ -39,6 +51,7 @@ public class ArucoDetector : MonoBehaviour
     {
         if (overlayView != null && overlayView.texture != null)
             Destroy(overlayView.texture);
+        _cachedFishMask?.Dispose();
     }
 
     // ── 매 프레임 감지 ────────────────────────────────────────
@@ -306,36 +319,123 @@ public class ArucoDetector : MonoBehaviour
         Cv2.WarpPerspective(frame, warped, M,
             new OpenCvSharp.Size(warpW, warpH));
 
+        // 내부 꼭짓점을 워프 공간으로 변환 → 마커 픽셀 크기 계산
+        Point2f[] innerSrc = GetInnerCorners(corners, ids);
+        Point2f[] innerWarped = TransformPoints(M, innerSrc);
+        // inner[0]=TL: TL의 x=마커 좌우 폭, y=마커 상하 높이
+        int cropX = Mathf.Max(0, Mathf.RoundToInt(innerWarped[0].X));
+        int cropY = Mathf.Max(0, Mathf.RoundToInt(innerWarped[0].Y));
+        Debug.Log($"[ArucoDetector] 마커 crop: x={cropX}px, y={cropY}px");
+
         // 회전 완료 후 crop + 마스크 적용
         int anchorPos = FindAnchorOffset(corners, ids);
+        string[] rotLabels = { "", "90°CCW", "180°", "90°CW" };
+
         if (anchorPos == 0)
-            return CropAndMask(warped, "회전 없음");
+            return CropAndMask(warped, "회전 없음", cropX, cropY);
 
         // RotateFlags: Rotate90Clockwise=0, Rotate180=1, Rotate90Counterclockwise=2
         RotateFlags flag = anchorPos == 1 ? (RotateFlags)2
                          : anchorPos == 2 ? RotateFlags.Rotate180
                          :                  RotateFlags.Rotate90Clockwise;
-        string[] rotLabels = { "", "90°CCW", "180°", "90°CW" };
         using Mat rotated = new Mat();
         Cv2.Rotate(warped, rotated, flag);
 
         // 90°/270° 회전 시 가로↔세로 교환 → warpW×warpH로 리사이즈
+        // crop도 비율에 맞게 축 교환: 좌우←원본상하, 상하←원본좌우
         if (anchorPos == 1 || anchorPos == 3)
         {
+            int cropXRot = Mathf.RoundToInt(cropY * (float)warpW / warpH);
+            int cropYRot = Mathf.RoundToInt(cropX * (float)warpH / warpW);
             Debug.Log($"[ArucoDetector] 회전({rotLabels[anchorPos]}) 후 리사이즈 전: " +
                       $"{rotated.Cols}×{rotated.Rows}px → {warpW}×{warpH}px");
             using Mat resized = new Mat();
             Cv2.Resize(rotated, resized, new OpenCvSharp.Size(warpW, warpH));
-            return CropAndMask(resized, rotLabels[anchorPos]);
+            return CropAndMask(resized, rotLabels[anchorPos], cropXRot, cropYRot);
         }
 
-        return CropAndMask(rotated, rotLabels[anchorPos]);
+        return CropAndMask(rotated, rotLabels[anchorPos], cropX, cropY);
     }
 
-    Texture2D CropAndMask(Mat mat, string rotLabel)
+    Texture2D CropAndMask(Mat mat, string rotLabel, int cropX = 0, int cropY = 0)
     {
+        ApplyFishMask(mat);
+
+        if (cropX > 0 || cropY > 0)
+        {
+            int cropW = mat.Cols - 2 * cropX;
+            int cropH = mat.Rows - 2 * cropY;
+            if (cropW > 0 && cropH > 0)
+            {
+                using Mat cropped = new Mat(mat, new OpenCvSharp.Rect(cropX, cropY, cropW, cropH));
+                Debug.Log($"[ArucoDetector] 최종 출력: {cropW}×{cropH}px ({rotLabel}, crop x:{cropX} y:{cropY})");
+                return MatToTexture2D(cropped);
+            }
+        }
+
         Debug.Log($"[ArucoDetector] 최종 출력: {mat.Cols}×{mat.Rows}px ({rotLabel})");
         return MatToTexture2D(mat);
+    }
+
+    // ── 퍼스펙티브 변환 행렬로 점 배열 변환 ──────────────────
+    static Point2f[] TransformPoints(Mat H, Point2f[] pts)
+    {
+        using Mat src = new Mat(pts.Length, 1, MatType.CV_32FC2);
+        for (int i = 0; i < pts.Length; i++)
+            src.Set<Vec2f>(i, 0, new Vec2f(pts[i].X, pts[i].Y));
+
+        using Mat dst = new Mat();
+        Cv2.PerspectiveTransform(src, dst, H);
+
+        var result = new Point2f[pts.Length];
+        for (int i = 0; i < pts.Length; i++)
+        {
+            Vec2f v = dst.At<Vec2f>(i, 0);
+            result[i] = new Point2f(v.Item0, v.Item1);
+        }
+        return result;
+    }
+
+    // ── fish0 마스크 적용 ─────────────────────────────────────
+    // fish0.png의 alpha 채널을 결과 이미지의 alpha 채널에 복사
+    void ApplyFishMask(Mat rgba)
+    {
+        if (fishMaskSource == null) return;
+
+        if (_cachedFishMask == null || _cachedFishMask.Empty())
+            _cachedFishMask = BuildFishMask(rgba.Cols, rgba.Rows);
+
+        if (_cachedFishMask != null && !_cachedFishMask.Empty())
+        {
+            Cv2.MixChannels(new[] { _cachedFishMask }, new[] { rgba }, new[] { 0, 3 });
+            Debug.Log("[ArucoDetector] Fish0 마스크 적용 완료.");
+        }
+    }
+
+    // ── fish0.png → alpha 마스크 생성 (최초 1회, 이후 캐시 사용) ──
+    Mat BuildFishMask(int targetW, int targetH)
+    {
+        Color32[] pixels = fishMaskSource.GetPixels32();
+        byte[] raw = new byte[pixels.Length * 4];
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            raw[i * 4    ] = pixels[i].r;
+            raw[i * 4 + 1] = pixels[i].g;
+            raw[i * 4 + 2] = pixels[i].b;
+            raw[i * 4 + 3] = pixels[i].a;
+        }
+
+        using Mat fishMat = new Mat(fishMaskSource.height, fishMaskSource.width, MatType.CV_8UC4);
+        Marshal.Copy(raw, 0, fishMat.Data, raw.Length);
+        Cv2.Flip(fishMat, fishMat, FlipMode.X); // Unity Y축 반전 복원
+
+        using Mat fishResized = new Mat();
+        Cv2.Resize(fishMat, fishResized, new OpenCvSharp.Size(targetW, targetH));
+
+        Mat mask = new Mat();
+        Cv2.ExtractChannel(fishResized, mask, 3); // alpha 채널 추출
+        Debug.Log($"[ArucoDetector] Fish0 마스크 생성: {targetW}×{targetH}px");
+        return mask;
     }
 
     // ── ID%4==0 마커 위치 → 회전 오프셋 반환 ────────────────
