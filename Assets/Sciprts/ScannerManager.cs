@@ -49,10 +49,19 @@ public class ScannerManager : MonoBehaviour
         string timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
         int fishNumber = tlMarkerId / 4;
         string fileName = $"{timestamp}_fish{fishNumber}.png";
-        string fullPath = Path.Combine($"D:\\ftp\\fish{fishNumber}", fileName);
+        string dirPath  = $"D:\\ftp\\fish{fishNumber}";
+        string fullPath = Path.Combine(dirPath, fileName);
+
+        // ── 폴더 없으면 1회 생성 ──────────────────────────────
+        if (!Directory.Exists(dirPath))
+        {
+            Directory.CreateDirectory(dirPath);
+            Debug.Log($"[저장] 폴더 생성: {dirPath}");
+        }
 
         // ── 직접 저장 (FTP 없이) ─────────────────────────────
         byte[] pngBytes = warped.EncodeToPNG();
+        Destroy(warped); // PNG 인코딩 완료 후 즉시 해제 (누수 방지)
         await Task.Run(() => File.WriteAllBytes(fullPath, pngBytes));
         Debug.Log($"[저장] {fullPath}");
 

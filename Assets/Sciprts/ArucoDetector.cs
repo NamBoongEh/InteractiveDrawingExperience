@@ -9,16 +9,12 @@ using ArucoDict = OpenCvSharp.Aruco.Dictionary; // Dictionary 이름 충돌 방�
 public class ArucoDetector : MonoBehaviour
 {
     [Header("Settings")]
-    public int outputWidth = 1920;
-    public int outputHeight = 1080;
-    public int[] targetIds = { 0, 1, 2, 3 };
+    public int outputWidth = 3508;
+    public int outputHeight = 2480;
     public float holdDurationToCapture = 1.5f;
     [Header("Debug UI")]
     public UnityEngine.UI.RawImage overlayView;
-    public UnityEngine.UI.Text failureText; // 생성 실패 시 안내 문구
-
-    [Header("Fish Mask Settings")]
-    public Texture2D fishMaskSource;          // Inspector에서 할당 or Resources/Fish/fish0 자동 로드
+    public UnityEngine.UI.Text failureText;
 
     public event Action<Texture2D, int> OnAllMarkersDetected;
 
@@ -26,7 +22,20 @@ public class ArucoDetector : MonoBehaviour
     private ArucoDict arucoDict;
     private DetectorParameters detParams;
     private float holdTimer = 0f;
-    private Mat _cachedFishMask;
+
+    // ── Fish 마스크 (동적) ──────────────────────────────────────
+    private int fishCount = 0;
+    private Texture2D[] fishMaskSources;
+    private Mat[] _cachedFishMasks;
+    private int _cachedMaskW = 0;
+    private int _cachedMaskH = 0;
+
+    // ── 재사용 버퍼 (매 프레임 GC 방지) ──────────────────────
+    private byte[] _rawBuffer;
+    private readonly Dictionary<int, int> _idToIdx = new Dictionary<int, int>();
+
+    // ── 회전 레이블 (상수) ────────────────────────────────────
+    private static readonly string[] s_rotLabels = { "회전 없음", "90°CCW", "180°", "90°CW" };
 
     // ── 초기화 ────────────────────────────────────────────────
     void Start()
@@ -36,14 +45,27 @@ public class ArucoDetector : MonoBehaviour
         detParams = DetectorParameters.Create();
         SetFailureMessage(null);
 
-        if (fishMaskSource == null)
+        // Resources/Fish/fish0, fish1, ... 순서로 로드
+        var list = new List<Texture2D>();
+        for (int i = 0; ; i++)
         {
-            fishMaskSource = Resources.Load<Texture2D>("Fish/fish0");
-            if (fishMaskSource == null)
-                Debug.LogWarning("[ArucoDetector] Fish/fish0 텍스처를 Resources에서 찾을 수 없습니다.");
-            else
-                Debug.Log("[ArucoDetector] Fish/fish0 텍스처 자동 로드 완료.");
+            var tex = Resources.Load<Texture2D>($"Fish/fish{i}");
+            if (tex == null) break;
+            list.Add(tex);
         }
+
+        fishCount = list.Count;
+        if (fishCount == 0)
+        {
+            Debug.LogWarning("[ArucoDetector] Resources/Fish 에 fish*.png 파일이 없습니다.");
+            fishMaskSources = Array.Empty<Texture2D>();
+            _cachedFishMasks = Array.Empty<Mat>();
+            return;
+        }
+
+        fishMaskSources = list.ToArray();
+        _cachedFishMasks = new Mat[fishCount];
+        Debug.Log($"[ArucoDetector] Fish {fishCount}개 로드 → 인식 ID 범위 0~{fishCount * 4 - 1}");
     }
 
     // ── 종료 시 UI 텍스처·캐시 정리 ─────────────────────────
@@ -51,7 +73,10 @@ public class ArucoDetector : MonoBehaviour
     {
         if (overlayView != null && overlayView.texture != null)
             Destroy(overlayView.texture);
-        _cachedFishMask?.Dispose();
+
+        if (_cachedFishMasks != null)
+            foreach (var m in _cachedFishMasks)
+                m?.Dispose();
     }
 
     // ── 매 프레임 감지 ────────────────────────────────────────
@@ -69,21 +94,15 @@ public class ArucoDetector : MonoBehaviour
         if (found)
         {
             DrawOverlay(frame, corners, ids);
-
-            // holdTimer가 막 시작될 때 한 번만 크기 출력
-            if (holdTimer == 0f)
-                LogInnerAreaSize(corners, ids);
-
             holdTimer += Time.deltaTime;
 
             if (holdTimer >= holdDurationToCapture)
             {
                 holdTimer = 0f;
-
                 try
                 {
                     int tlMarkerId = FindTLMarkerId(corners, ids);
-                    Texture2D warped = Warp(frame, corners, ids);
+                    Texture2D warped = Warp(frame, corners, ids, tlMarkerId);
                     SetFailureMessage(null);
                     OnAllMarkersDetected?.Invoke(warped, tlMarkerId);
                 }
@@ -110,22 +129,25 @@ public class ArucoDetector : MonoBehaviour
     }
 
     // ── WebCamTexture → RGBA Mat ──────────────────────────────
-    // alpha 강제 255 (웹캠은 투명도 없음), Unity Y축 반전 보정
+    // alpha 강제 255, Unity Y축 반전 보정 / _rawBuffer 재사용으로 GC 최소화
     Mat WebCamToMat(WebCamTexture webcam)
     {
         Color32[] pixels = webcam.GetPixels32();
-        byte[] raw = new byte[pixels.Length * 4];
+        int needed = pixels.Length * 4;
+
+        if (_rawBuffer == null || _rawBuffer.Length != needed)
+            _rawBuffer = new byte[needed];
 
         for (int i = 0; i < pixels.Length; i++)
         {
-            raw[i * 4    ] = pixels[i].r;
-            raw[i * 4 + 1] = pixels[i].g;
-            raw[i * 4 + 2] = pixels[i].b;
-            raw[i * 4 + 3] = 255;
+            _rawBuffer[i * 4    ] = pixels[i].r;
+            _rawBuffer[i * 4 + 1] = pixels[i].g;
+            _rawBuffer[i * 4 + 2] = pixels[i].b;
+            _rawBuffer[i * 4 + 3] = 255;
         }
 
         Mat mat = new Mat(webcam.height, webcam.width, MatType.CV_8UC4);
-        Marshal.Copy(raw, 0, mat.Data, raw.Length);
+        Marshal.Copy(_rawBuffer, 0, mat.Data, needed);
         Cv2.Flip(mat, mat, FlipMode.X);
         return mat;
     }
@@ -153,32 +175,52 @@ public class ArucoDetector : MonoBehaviour
     }
 
     // ── ArUco 마커 감지 ───────────────────────────────────────
-    // targetIds 전부 발견한 경우에만 true 반환
+    // fishCount 그룹(각 4개 ID) 중 완전한 그룹을 발견하면 true 반환
     (bool, Point2f[][], int[]) TryDetect(Mat gray)
     {
         CvAruco.DetectMarkers(
             gray, arucoDict,
-            out Point2f[][] corners,
-            out int[] ids,
+            out Point2f[][] allCorners,
+            out int[] allIds,
             detParams,
             out _);
 
-        if (ids == null || ids.Length < targetIds.Length)
+        if (allIds == null || allIds.Length < 4)
             return (false, null, null);
 
-        var foundSet = new HashSet<int>(ids);
-        foreach (int t in targetIds)
-            if (!foundSet.Contains(t)) return (false, null, null);
+        // _idToIdx 재사용 (매 프레임 Dictionary 신규 할당 방지)
+        _idToIdx.Clear();
+        for (int i = 0; i < allIds.Length; i++)
+            _idToIdx[allIds[i]] = i;
 
-        return (true, corners, ids);
+        // 그룹(fish0=0~3, fish1=4~7, ...) 순서대로 완전한 4개 체크
+        for (int g = 0; g < fishCount; g++)
+        {
+            int b = g * 4;
+            if (!_idToIdx.ContainsKey(b) || !_idToIdx.ContainsKey(b + 1) ||
+                !_idToIdx.ContainsKey(b + 2) || !_idToIdx.ContainsKey(b + 3))
+                continue;
+
+            return (true,
+                new Point2f[4][]
+                {
+                    allCorners[_idToIdx[b    ]],
+                    allCorners[_idToIdx[b + 1]],
+                    allCorners[_idToIdx[b + 2]],
+                    allCorners[_idToIdx[b + 3]]
+                },
+                new int[] { b, b + 1, b + 2, b + 3 });
+        }
+
+        return (false, null, null);
     }
 
-    // ── 마커 내부 꼭짓점(종이 중심에 가장 가까운 모서리) TL/TR/BR/BL 반환 ──
-    static Point2f[] GetInnerCorners(Point2f[][] corners, int[] ids)
+    // ── 공통: 마커 센터 배열 + 중점 계산 ────────────────────
+    static (Point2f[] centers, float midX, float midY) ComputeCenters(Point2f[][] corners, int count)
     {
+        var centers = new Point2f[count];
         float sumX = 0, sumY = 0;
-        var centers = new Point2f[ids.Length];
-        for (int i = 0; i < ids.Length; i++)
+        for (int i = 0; i < count; i++)
         {
             var c = corners[i];
             centers[i] = new Point2f(
@@ -187,19 +229,21 @@ public class ArucoDetector : MonoBehaviour
             sumX += centers[i].X;
             sumY += centers[i].Y;
         }
-        float midX = sumX / ids.Length;
-        float midY = sumY / ids.Length;
+        return (centers, sumX / count, sumY / count);
+    }
 
+    // ── 마커 내부 꼭짓점(중심에 가장 가까운 모서리) TL/TR/BR/BL ──
+    static Point2f[] GetInnerCorners(Point2f[][] corners, int[] ids)
+    {
+        var (centers, midX, midY) = ComputeCenters(corners, ids.Length);
         Point2f tl = default, tr = default, br = default, bl = default;
         for (int i = 0; i < ids.Length; i++)
         {
             Point2f inner = ClosestCorner(corners[i], midX, midY);
-            Point2f center = centers[i];
-
-            if      (center.X <= midX && center.Y <= midY) tl = inner;
-            else if (center.X >  midX && center.Y <= midY) tr = inner;
-            else if (center.X >  midX && center.Y >  midY) br = inner;
-            else                                            bl = inner;
+            if      (centers[i].X <= midX && centers[i].Y <= midY) tl = inner;
+            else if (centers[i].X >  midX && centers[i].Y <= midY) tr = inner;
+            else if (centers[i].X >  midX && centers[i].Y >  midY) br = inner;
+            else                                                    bl = inner;
         }
         return new[] { tl, tr, br, bl };
     }
@@ -216,33 +260,18 @@ public class ArucoDetector : MonoBehaviour
         return best;
     }
 
-    // ── 마커 외부 꼭짓점(중심에서 가장 먼 모서리) TL/TR/BR/BL 반환 ──
+    // ── 마커 외부 꼭짓점(중심에서 가장 먼 모서리) TL/TR/BR/BL ──
     static Point2f[] GetOuterCorners(Point2f[][] corners, int[] ids)
     {
-        float sumX = 0, sumY = 0;
-        var centers = new Point2f[ids.Length];
-        for (int i = 0; i < ids.Length; i++)
-        {
-            var c = corners[i];
-            centers[i] = new Point2f(
-                (c[0].X + c[1].X + c[2].X + c[3].X) / 4f,
-                (c[0].Y + c[1].Y + c[2].Y + c[3].Y) / 4f);
-            sumX += centers[i].X;
-            sumY += centers[i].Y;
-        }
-        float midX = sumX / ids.Length;
-        float midY = sumY / ids.Length;
-
+        var (centers, midX, midY) = ComputeCenters(corners, ids.Length);
         Point2f tl = default, tr = default, br = default, bl = default;
         for (int i = 0; i < ids.Length; i++)
         {
-            Point2f outer  = FarthestCorner(corners[i], midX, midY);
-            Point2f center = centers[i];
-
-            if      (center.X <= midX && center.Y <= midY) tl = outer;
-            else if (center.X >  midX && center.Y <= midY) tr = outer;
-            else if (center.X >  midX && center.Y >  midY) br = outer;
-            else                                            bl = outer;
+            Point2f outer = FarthestCorner(corners[i], midX, midY);
+            if      (centers[i].X <= midX && centers[i].Y <= midY) tl = outer;
+            else if (centers[i].X >  midX && centers[i].Y <= midY) tr = outer;
+            else if (centers[i].X >  midX && centers[i].Y >  midY) br = outer;
+            else                                                    bl = outer;
         }
         return new[] { tl, tr, br, bl };
     }
@@ -262,104 +291,84 @@ public class ArucoDetector : MonoBehaviour
     // ── TL 위치 마커의 ID 반환 ────────────────────────────────
     static int FindTLMarkerId(Point2f[][] corners, int[] ids)
     {
-        float sumX = 0, sumY = 0;
-        var centers = new Point2f[ids.Length];
-        for (int i = 0; i < ids.Length; i++)
-        {
-            var c = corners[i];
-            centers[i] = new Point2f(
-                (c[0].X + c[1].X + c[2].X + c[3].X) / 4f,
-                (c[0].Y + c[1].Y + c[2].Y + c[3].Y) / 4f);
-            sumX += centers[i].X;
-            sumY += centers[i].Y;
-        }
-        float midX = sumX / ids.Length;
-        float midY = sumY / ids.Length;
-
+        var (centers, midX, midY) = ComputeCenters(corners, ids.Length);
         for (int i = 0; i < ids.Length; i++)
             if (centers[i].X <= midX && centers[i].Y <= midY)
                 return ids[i];
-
         return ids[0]; // fallback
     }
 
-    // ── 퍼스펙티브 워프 → 회전 보정 → Fish0 마스크 → crop ──
-    // 처리 순서: 외부꼭짓점 4점 변환(fish0 전체크기) → 회전 → Fish0 마스크(전체 적용) → 378px 상하좌우 crop
-    // 마스크 후 crop: 마커 영역을 물리적으로 제거, 최종 출력 = fish0 내부영역(2634×1606)
-    // 반환된 Texture2D는 호출자가 Destroy() 책임
-    Texture2D Warp(Mat frame, Point2f[][] corners, int[] ids)
+    // ── ID%4==0 마커 위치 → 회전 오프셋 반환 ────────────────
+    // 0=TL(무회전) / 1=TR(90°CCW) / 2=BR(180°) / 3=BL(90°CW)
+    static int FindAnchorOffset(Point2f[][] corners, int[] ids)
     {
-        // 외부 꼭짓점(마커 바깥 모서리) 기준 → fish0 전체 크기(마커 포함)로 워프
+        var (centers, midX, midY) = ComputeCenters(corners, ids.Length);
+        for (int i = 0; i < ids.Length; i++)
+        {
+            if (ids[i] % 4 != 0) continue;
+            bool left = centers[i].X <= midX;
+            bool top  = centers[i].Y <= midY;
+            if ( left &&  top) return 0; // TL → 무회전
+            if (!left &&  top) return 1; // TR → 90° CCW
+            if (!left && !top) return 2; // BR → 180°
+            return 3;                    // BL → 90° CW
+        }
+        return 0; // fallback
+    }
+
+    // ── 퍼스펙티브 워프 → 회전 보정 → Fish 마스크 → crop ──────
+    Texture2D Warp(Mat frame, Point2f[][] corners, int[] ids, int tlMarkerId)
+    {
+        int fishIndex = tlMarkerId / 4;
+
         Point2f[] src = GetOuterCorners(corners, ids);
-
-        // ── 자연 크기 계산 및 로그 (외부 꼭짓점 = 용지 전체 크기) ──
-        Point2f tl = src[0], tr = src[1], br = src[2], bl = src[3];
-        float topW    = Mathf.Sqrt((tr.X-tl.X)*(tr.X-tl.X) + (tr.Y-tl.Y)*(tr.Y-tl.Y));
-        float bottomW = Mathf.Sqrt((br.X-bl.X)*(br.X-bl.X) + (br.Y-bl.Y)*(br.Y-bl.Y));
-        float leftH   = Mathf.Sqrt((bl.X-tl.X)*(bl.X-tl.X) + (bl.Y-tl.Y)*(bl.Y-tl.Y));
-        float rightH  = Mathf.Sqrt((br.X-tr.X)*(br.X-tr.X) + (br.Y-tr.Y)*(br.Y-tr.Y));
-        float avgW    = (topW + bottomW) / 2f;
-        float avgH    = (leftH + rightH) / 2f;
-        Debug.Log($"[ArucoDetector] Warp 전 자연 크기 (카메라 원본 기준, 외부 꼭짓점)\n" +
-                  $"  Width  → 상단: {topW:F1}px / 하단: {bottomW:F1}px / 평균: {avgW:F1}px\n" +
-                  $"  Height → 좌측: {leftH:F1}px / 우측: {rightH:F1}px / 평균: {avgH:F1}px");
-
         int warpW = outputWidth;
         int warpH = outputHeight;
 
         Point2f[] dst = {
-            new Point2f(0,      0),
-            new Point2f(warpW,  0),
-            new Point2f(warpW,  warpH),
-            new Point2f(0,      warpH)
+            new Point2f(0,     0),
+            new Point2f(warpW, 0),
+            new Point2f(warpW, warpH),
+            new Point2f(0,     warpH)
         };
 
         using Mat M = Cv2.GetPerspectiveTransform(src, dst);
         using Mat warped = new Mat();
-        Cv2.WarpPerspective(frame, warped, M,
-            new OpenCvSharp.Size(warpW, warpH));
+        Cv2.WarpPerspective(frame, warped, M, new OpenCvSharp.Size(warpW, warpH));
 
-        // 내부 꼭짓점을 워프 공간으로 변환 → 마커 픽셀 크기 계산
-        Point2f[] innerSrc = GetInnerCorners(corners, ids);
-        Point2f[] innerWarped = TransformPoints(M, innerSrc);
-        // inner[0]=TL: TL의 x=마커 좌우 폭, y=마커 상하 높이
+        // 내부 꼭짓점을 워프 공간으로 변환 → 마커 픽셀 크기(crop 여백) 계산
+        Point2f[] innerWarped = TransformPoints(M, GetInnerCorners(corners, ids));
         int cropX = Mathf.Max(0, Mathf.RoundToInt(innerWarped[0].X));
         int cropY = Mathf.Max(0, Mathf.RoundToInt(innerWarped[0].Y));
-        Debug.Log($"[ArucoDetector] 마커 crop: x={cropX}px, y={cropY}px");
+        Debug.Log($"[ArucoDetector] fish{fishIndex} 마스크, 마커 crop: x={cropX}px, y={cropY}px");
 
-        // 회전 완료 후 crop + 마스크 적용
         int anchorPos = FindAnchorOffset(corners, ids);
-        string[] rotLabels = { "", "90°CCW", "180°", "90°CW" };
 
         if (anchorPos == 0)
-            return CropAndMask(warped, "회전 없음", cropX, cropY);
+            return CropAndMask(warped, s_rotLabels[0], cropX, cropY, fishIndex);
 
-        // RotateFlags: Rotate90Clockwise=0, Rotate180=1, Rotate90Counterclockwise=2
         RotateFlags flag = anchorPos == 1 ? (RotateFlags)2
                          : anchorPos == 2 ? RotateFlags.Rotate180
                          :                  RotateFlags.Rotate90Clockwise;
         using Mat rotated = new Mat();
         Cv2.Rotate(warped, rotated, flag);
 
-        // 90°/270° 회전 시 가로↔세로 교환 → warpW×warpH로 리사이즈
-        // crop도 비율에 맞게 축 교환: 좌우←원본상하, 상하←원본좌우
+        // 90°/270° 회전 시 가로↔세로 교환 → warpW×warpH 리사이즈, crop축 교환
         if (anchorPos == 1 || anchorPos == 3)
         {
             int cropXRot = Mathf.RoundToInt(cropY * (float)warpW / warpH);
             int cropYRot = Mathf.RoundToInt(cropX * (float)warpH / warpW);
-            Debug.Log($"[ArucoDetector] 회전({rotLabels[anchorPos]}) 후 리사이즈 전: " +
-                      $"{rotated.Cols}×{rotated.Rows}px → {warpW}×{warpH}px");
             using Mat resized = new Mat();
             Cv2.Resize(rotated, resized, new OpenCvSharp.Size(warpW, warpH));
-            return CropAndMask(resized, rotLabels[anchorPos], cropXRot, cropYRot);
+            return CropAndMask(resized, s_rotLabels[anchorPos], cropXRot, cropYRot, fishIndex);
         }
 
-        return CropAndMask(rotated, rotLabels[anchorPos], cropX, cropY);
+        return CropAndMask(rotated, s_rotLabels[anchorPos], cropX, cropY, fishIndex);
     }
 
-    Texture2D CropAndMask(Mat mat, string rotLabel, int cropX = 0, int cropY = 0)
+    Texture2D CropAndMask(Mat mat, string rotLabel, int cropX, int cropY, int fishIndex)
     {
-        ApplyFishMask(mat);
+        ApplyFishMask(mat, fishIndex);
 
         if (cropX > 0 || cropY > 0)
         {
@@ -396,105 +405,70 @@ public class ArucoDetector : MonoBehaviour
         return result;
     }
 
-    // ── fish0 마스크 적용 ─────────────────────────────────────
-    // fish0.png의 alpha 채널을 결과 이미지의 alpha 채널에 복사
-    void ApplyFishMask(Mat rgba)
+    // ── fish{fishIndex} 마스크 적용 ───────────────────────────
+    void ApplyFishMask(Mat rgba, int fishIndex)
     {
-        if (fishMaskSource == null) return;
+        if (fishIndex < 0 || fishIndex >= fishCount) return;
+        if (fishMaskSources[fishIndex] == null) return;
 
-        if (_cachedFishMask == null || _cachedFishMask.Empty())
-            _cachedFishMask = BuildFishMask(rgba.Cols, rgba.Rows);
+        int w = rgba.Cols, h = rgba.Rows;
 
-        if (_cachedFishMask != null && !_cachedFishMask.Empty())
+        // 출력 크기가 바뀌면 모든 캐시 무효화
+        if (_cachedMaskW != w || _cachedMaskH != h)
         {
-            Cv2.MixChannels(new[] { _cachedFishMask }, new[] { rgba }, new[] { 0, 3 });
-            Debug.Log("[ArucoDetector] Fish0 마스크 적용 완료.");
+            foreach (var m in _cachedFishMasks) m?.Dispose();
+            _cachedFishMasks = new Mat[fishCount];
+            _cachedMaskW = w;
+            _cachedMaskH = h;
+        }
+
+        _cachedFishMasks[fishIndex] ??= BuildFishMask(fishMaskSources[fishIndex], w, h);
+
+        if (_cachedFishMasks[fishIndex] != null && !_cachedFishMasks[fishIndex].Empty())
+        {
+            Cv2.MixChannels(new[] { _cachedFishMasks[fishIndex] }, new[] { rgba }, new[] { 0, 3 });
+            Debug.Log($"[ArucoDetector] Fish{fishIndex} 마스크 적용 완료.");
         }
     }
 
-    // ── fish0.png → alpha 마스크 생성 (최초 1회, 이후 캐시 사용) ──
-    Mat BuildFishMask(int targetW, int targetH)
+    // ── fish{N}.png → alpha 마스크 생성 ──────────────────────
+    // alpha 채널만 1채널로 직접 복사 (4채널 복사 대비 메모리 1/4)
+    static Mat BuildFishMask(Texture2D source, int targetW, int targetH)
     {
-        Color32[] pixels = fishMaskSource.GetPixels32();
-        byte[] raw = new byte[pixels.Length * 4];
+        Color32[] pixels = source.GetPixels32();
+        byte[] alpha = new byte[pixels.Length];
         for (int i = 0; i < pixels.Length; i++)
-        {
-            raw[i * 4    ] = pixels[i].r;
-            raw[i * 4 + 1] = pixels[i].g;
-            raw[i * 4 + 2] = pixels[i].b;
-            raw[i * 4 + 3] = pixels[i].a;
-        }
+            alpha[i] = pixels[i].a;
 
-        using Mat fishMat = new Mat(fishMaskSource.height, fishMaskSource.width, MatType.CV_8UC4);
-        Marshal.Copy(raw, 0, fishMat.Data, raw.Length);
-        Cv2.Flip(fishMat, fishMat, FlipMode.X); // Unity Y축 반전 복원
-
-        using Mat fishResized = new Mat();
-        Cv2.Resize(fishMat, fishResized, new OpenCvSharp.Size(targetW, targetH));
+        using Mat alphaMat = new Mat(source.height, source.width, MatType.CV_8UC1);
+        Marshal.Copy(alpha, 0, alphaMat.Data, alpha.Length);
+        Cv2.Flip(alphaMat, alphaMat, FlipMode.X); // Unity Y축 반전 복원
 
         Mat mask = new Mat();
-        Cv2.ExtractChannel(fishResized, mask, 3); // alpha 채널 추출
-        Debug.Log($"[ArucoDetector] Fish0 마스크 생성: {targetW}×{targetH}px");
+        Cv2.Resize(alphaMat, mask, new OpenCvSharp.Size(targetW, targetH));
+        Debug.Log($"[ArucoDetector] Fish 마스크 생성: {targetW}×{targetH}px");
         return mask;
     }
 
-    // ── ID%4==0 마커 위치 → 회전 오프셋 반환 ────────────────
-    // 0=TL(무회전) / 1=TR(90°CCW) / 2=BR(180°) / 3=BL(90°CW)
-    static int FindAnchorOffset(Point2f[][] corners, int[] ids)
-    {
-        float sumX = 0, sumY = 0;
-        var centers = new Point2f[ids.Length];
-        for (int i = 0; i < ids.Length; i++)
-        {
-            var c = corners[i];
-            centers[i] = new Point2f(
-                (c[0].X + c[1].X + c[2].X + c[3].X) / 4f,
-                (c[0].Y + c[1].Y + c[2].Y + c[3].Y) / 4f);
-            sumX += centers[i].X;
-            sumY += centers[i].Y;
-        }
-        float midX = sumX / ids.Length;
-        float midY = sumY / ids.Length;
-
-        for (int i = 0; i < ids.Length; i++)
-        {
-            if (ids[i] % 4 != 0) continue;
-            bool left = centers[i].X <= midX;
-            bool top  = centers[i].Y <= midY;
-            if ( left &&  top) return 0; // TL → 무회전
-            if (!left &&  top) return 1; // TR → 90° CCW
-            if (!left && !top) return 2; // BR → 180°
-            return 3;                    // BL → 90° CW
-        }
-        return 0; // fallback
-    }
-
     // ── 마커 내부 영역 크기 디버그 출력 ──────────────────────
-    // 4개 내부 꼭짓점(TL/TR/BR/BL) 사이의 가로·세로 픽셀 크기를 로그로 출력
-    // 사용법: Inspector 버튼 또는 코드에서 LogInnerAreaSize(corners, ids) 호출
     public void LogInnerAreaSize(Point2f[][] corners, int[] ids)
     {
         Point2f[] inner = GetInnerCorners(corners, ids);
-        // inner[0]=TL, inner[1]=TR, inner[2]=BR, inner[3]=BL
         Point2f tl = inner[0], tr = inner[1], br = inner[2], bl = inner[3];
 
-        float topWidth    = Mathf.Sqrt((tr.X - tl.X) * (tr.X - tl.X) + (tr.Y - tl.Y) * (tr.Y - tl.Y));
-        float bottomWidth = Mathf.Sqrt((br.X - bl.X) * (br.X - bl.X) + (br.Y - bl.Y) * (br.Y - bl.Y));
-        float leftHeight  = Mathf.Sqrt((bl.X - tl.X) * (bl.X - tl.X) + (bl.Y - tl.Y) * (bl.Y - tl.Y));
-        float rightHeight = Mathf.Sqrt((br.X - tr.X) * (br.X - tr.X) + (br.Y - tr.Y) * (br.Y - tr.Y));
-
-        float avgWidth  = (topWidth  + bottomWidth) / 2f;
-        float avgHeight = (leftHeight + rightHeight) / 2f;
+        float topW    = Mathf.Sqrt((tr.X - tl.X) * (tr.X - tl.X) + (tr.Y - tl.Y) * (tr.Y - tl.Y));
+        float bottomW = Mathf.Sqrt((br.X - bl.X) * (br.X - bl.X) + (br.Y - bl.Y) * (br.Y - bl.Y));
+        float leftH   = Mathf.Sqrt((bl.X - tl.X) * (bl.X - tl.X) + (bl.Y - tl.Y) * (bl.Y - tl.Y));
+        float rightH  = Mathf.Sqrt((br.X - tr.X) * (br.X - tr.X) + (br.Y - tr.Y) * (br.Y - tr.Y));
 
         Debug.Log($"[ArucoDetector] 마커 내부 영역 크기\n" +
-                  $"  Width  → 상단: {topWidth:F1}px / 하단: {bottomWidth:F1}px / 평균: {avgWidth:F1}px\n" +
-                  $"  Height → 좌측: {leftHeight:F1}px / 우측: {rightHeight:F1}px / 평균: {avgHeight:F1}px\n" +
+                  $"  Width  → 상단: {topW:F1}px / 하단: {bottomW:F1}px / 평균: {(topW+bottomW)/2f:F1}px\n" +
+                  $"  Height → 좌측: {leftH:F1}px / 우측: {rightH:F1}px / 평균: {(leftH+rightH)/2f:F1}px\n" +
                   $"  TL({tl.X:F0},{tl.Y:F0})  TR({tr.X:F0},{tr.Y:F0})\n" +
                   $"  BL({bl.X:F0},{bl.Y:F0})  BR({br.X:F0},{br.Y:F0})");
     }
 
     // ── 디버그 오버레이 ───────────────────────────────────────
-    // Inspector에서 overlayView 지정 시에만 동작
     void DrawOverlay(Mat frame, Point2f[][] corners, int[] ids)
     {
         if (overlayView == null) return;
@@ -507,7 +481,6 @@ public class ArucoDetector : MonoBehaviour
         using Mat overlayRGBA = new Mat();
         Cv2.CvtColor(overlay, overlayRGBA, ColorConversionCodes.BGR2RGBA);
 
-        // 이전 프레임 텍스처 해제 후 교체 (매 프레임 메모리 누수 방지)
         if (overlayView.texture != null)
             Destroy(overlayView.texture);
         overlayView.texture = MatToTexture2D(overlayRGBA);

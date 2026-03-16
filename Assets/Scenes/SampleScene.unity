@@ -533,10 +533,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 54229849e89579c49b8523f16630af56, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  targetIds: 00000000010000000200000003000000
+  outputWidth: 3508
+  outputHeight: 2480
   holdDurationToCapture: 1.5
-  backgroundThreshold: 120
-  markerSizePxInFish0: 351
   overlayView: {fileID: 616127336}
   failureText: {fileID: 472110954}
 --- !u!1 &616127334
