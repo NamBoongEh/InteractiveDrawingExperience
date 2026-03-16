@@ -374,7 +374,7 @@ public class ArucoDetector : MonoBehaviour
         if (ms > 0 && cropW > 0 && cropH > 0)
         {
             // 2. 마커 크기만큼 crop → 마커 물리적 제거
-            using Mat cropped = new Mat(mat, new Rect(ms, ms, cropW, cropH));
+            using Mat cropped = new Mat(mat, new OpenCvSharp.Rect(ms, ms, cropW, cropH));
             Debug.Log($"[ArucoDetector] 최종 출력: {cropW}×{cropH}px ({rotLabel}, 마커 {ms}px crop)");
             return MatToTexture2D(cropped);
         }
