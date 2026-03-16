@@ -359,25 +359,27 @@ public class ArucoDetector : MonoBehaviour
         return CropAndMask(rotated, rotLabels[anchorPos]);
     }
 
-    // ── 마커 크기(fishSourceMarkerPx)만큼 상하좌우 crop → Fish0 마스크 → Texture2D ──
-    // crop = 마커를 물리적으로 제거하는 가장 확실한 방법
+    // ── Fish0 마스크 → 마커 크기(fishSourceMarkerPx)만큼 상하좌우 crop → Texture2D ──
+    // 순서: Fish0 마스크(전체 크기 적용) → 378px 상하좌우 crop(마커 물리적 제거)
     // crop 후 크기: (fish0전체 - 2×마커크기) = 2634×1606 (fish0 내부영역과 일치)
     Texture2D CropAndMask(Mat mat, string rotLabel)
     {
+        // 1. Fish0 마스크 먼저 적용 (전체 크기: 3390×2362)
+        ApplyReferenceMask(mat);
+
         int ms = (fishMaskSource != null && fishSourceMarkerPx > 0) ? fishSourceMarkerPx : 0;
         int cropW = mat.Cols - 2 * ms;
         int cropH = mat.Rows - 2 * ms;
 
         if (ms > 0 && cropW > 0 && cropH > 0)
         {
+            // 2. 마커 크기만큼 crop → 마커 물리적 제거
             using Mat cropped = new Mat(mat, new Rect(ms, ms, cropW, cropH));
-            ApplyReferenceMask(cropped);
             Debug.Log($"[ArucoDetector] 최종 출력: {cropW}×{cropH}px ({rotLabel}, 마커 {ms}px crop)");
             return MatToTexture2D(cropped);
         }
 
-        // fallback: crop 불가 시 원본 크기로 마스크만 적용
-        ApplyReferenceMask(mat);
+        // fallback: crop 불가 시 마스크만 적용된 원본 크기 반환
         Debug.Log($"[ArucoDetector] 최종 출력: {mat.Cols}×{mat.Rows}px ({rotLabel}, crop 없음)");
         return MatToTexture2D(mat);
     }
@@ -461,8 +463,9 @@ public class ArucoDetector : MonoBehaviour
         Cv2.MixChannels(new[] { silhouette }, new[] { rgba }, new[] { 0, 3 });
     }
 
-    // ── fish0.png → 워프 출력 크기 실루엣 마스크 생성 ────────
-    // 마커 내부 영역(fishSourceMarkerPx 기준)만 크롭 후 targetW×targetH로 리사이즈
+    // ── fish0.png 전체 → 워프 출력 크기 실루엣 마스크 생성 ──────
+    // fish0 전체(마커 포함)를 targetW×targetH로 리사이즈 후 alpha 기반 실루엣 추출
+    // 마커는 crop 단계에서 물리적으로 제거되므로 마스크에 포함되어도 무방
     // 반환된 Mat은 _cachedFishMask에 저장되며 OnDestroy에서 Dispose됨
     Mat BuildFishMask(int targetW, int targetH)
     {
@@ -483,27 +486,17 @@ public class ArucoDetector : MonoBehaviour
         Marshal.Copy(raw, 0, fishMat.Data, raw.Length);
         Cv2.Flip(fishMat, fishMat, FlipMode.X); // Unity Y축 반전 복원
 
-        // 마커 내부 영역 크롭 (inner corner = 마커 크기만큼 안쪽)
-        int ms = fishSourceMarkerPx;
-        int iw = fw - 2 * ms;
-        int ih = fh - 2 * ms;
-        if (iw <= 0 || ih <= 0)
-        {
-            Debug.LogError($"[ArucoDetector] fishSourceMarkerPx({ms})가 너무 커 내부 영역 없음 (fish0: {fw}×{fh})");
-            return null;
-        }
-
-        float scaleX = (float)targetW / iw;
-        float scaleY = (float)targetH / ih;
+        // fish0 전체를 targetW×targetH로 리사이즈 (마커 포함, 내부 크롭 없음)
+        // → 마커는 이후 CropAndMask()의 378px crop에서 물리적으로 제거됨
+        float scaleX = (float)targetW / fw;
+        float scaleY = (float)targetH / fh;
         Debug.Log($"[ArucoDetector] Fish0 마스크 스케일 — " +
-                  $"내부영역: {iw}×{ih}px → 출력: {targetW}×{targetH}px " +
+                  $"전체: {fw}×{fh}px → 출력: {targetW}×{targetH}px " +
                   $"(scaleX={scaleX:F3}, scaleY={scaleY:F3})");
 
-        using Mat fishInner = new Mat(fishMat, new Rect(ms, ms, iw, ih));
-
-        // 마커 크기 기반 스케일 적용 → 워프 출력 크기로 리사이즈
+        // fish0 전체를 워프 출력 크기로 리사이즈
         using Mat fishResized = new Mat();
-        Cv2.Resize(fishInner, fishResized, new OpenCvSharp.Size(targetW, targetH));
+        Cv2.Resize(fishMat, fishResized, new OpenCvSharp.Size(targetW, targetH));
 
         // 실루엣 추출: alpha 채널 우선 사용 (투명 배경 PNG), 없으면 RGB 임계값
         // 주의: 흰 배경 PNG는 Unity에서 alpha=255 전체 → maxA>10 이지만 실제 투명도 없음
