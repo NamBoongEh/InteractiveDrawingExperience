@@ -486,17 +486,6 @@ public class ArucoDetector : MonoBehaviour
         Marshal.Copy(raw, 0, fishMat.Data, raw.Length);
         Cv2.Flip(fishMat, fishMat, FlipMode.X); // Unity Y축 반전 복원
 
-        // fish0 전체를 targetW×targetH로 리사이즈 (마커 포함, 내부 크롭 없음)
-        // → 마커는 이후 CropAndMask()의 378px crop에서 물리적으로 제거됨
-        float scaleX = (float)targetW / fw;
-        float scaleY = (float)targetH / fh;
-        Debug.Log($"[ArucoDetector] Fish0 마스크 스케일 — " +
-                  $"전체: {fw}×{fh}px → 출력: {targetW}×{targetH}px " +
-                  $"(scaleX={scaleX:F3}, scaleY={scaleY:F3})");
-
-        // fish0 전체를 워프 출력 크기로 리사이즈
-        using Mat fishResized = new Mat();
-        Cv2.Resize(fishMat, fishResized, new OpenCvSharp.Size(targetW, targetH));
 
         // 실루엣 추출: alpha 채널 우선 사용 (투명 배경 PNG), 없으면 RGB 임계값
         // 주의: 흰 배경 PNG는 Unity에서 alpha=255 전체 → maxA>10 이지만 실제 투명도 없음
