@@ -221,6 +221,51 @@ public class ArucoDetector : MonoBehaviour
         return best;
     }
 
+    // ── 마커 외부 꼭짓점(중심에서 가장 먼 모서리) TL/TR/BR/BL 반환 ──
+    // 워프 src를 외부 꼭짓점으로 잡아 fish0 전체 크기(마커 포함)로 출력
+    // → 이후 CropAndMask()에서 fishSourceMarkerPx만큼 상하좌우 crop으로 마커 제거
+    static Point2f[] GetOuterCorners(Point2f[][] corners, int[] ids)
+    {
+        float sumX = 0, sumY = 0;
+        var centers = new Point2f[ids.Length];
+        for (int i = 0; i < ids.Length; i++)
+        {
+            var c = corners[i];
+            centers[i] = new Point2f(
+                (c[0].X + c[1].X + c[2].X + c[3].X) / 4f,
+                (c[0].Y + c[1].Y + c[2].Y + c[3].Y) / 4f);
+            sumX += centers[i].X;
+            sumY += centers[i].Y;
+        }
+        float midX = sumX / ids.Length;
+        float midY = sumY / ids.Length;
+
+        Point2f tl = default, tr = default, br = default, bl = default;
+        for (int i = 0; i < ids.Length; i++)
+        {
+            Point2f outer  = FarthestCorner(corners[i], midX, midY);
+            Point2f center = centers[i];
+
+            if      (center.X <= midX && center.Y <= midY) tl = outer;
+            else if (center.X >  midX && center.Y <= midY) tr = outer;
+            else if (center.X >  midX && center.Y >  midY) br = outer;
+            else                                            bl = outer;
+        }
+        return new[] { tl, tr, br, bl };
+    }
+
+    static Point2f FarthestCorner(Point2f[] c, float tx, float ty)
+    {
+        Point2f best = c[0];
+        float maxD = 0;
+        foreach (var p in c)
+        {
+            float d = (p.X - tx) * (p.X - tx) + (p.Y - ty) * (p.Y - ty);
+            if (d > maxD) { maxD = d; best = p; }
+        }
+        return best;
+    }
+
     // ── TL 위치 마커의 ID 반환 ────────────────────────────────
     static int FindTLMarkerId(Point2f[][] corners, int[] ids)
     {
@@ -245,43 +290,35 @@ public class ArucoDetector : MonoBehaviour
         return ids[0]; // fallback
     }
 
-    // ── 퍼스펙티브 워프 → 회전 보정 → Fish0 마스크 ──
-    // 처리 순서: 4점 퍼스펙티브 변환 → 회전(ID%4==0 좌상단) → Fish0 마스크(배경 투명화 포함)
-    // warpedInner = 실제 감지된 내부꼭짓점 위치 → Fish0 동적 정렬로 그림·마스크 일치 보장
+    // ── 퍼스펙티브 워프 → 회전 보정 → 마커 crop → Fish0 마스크 ──
+    // 처리 순서: 외부꼭짓점 4점 변환(fish0 전체크기) → 회전 → 마커 378px 상하좌우 crop → Fish0 마스크
+    // crop으로 마커를 물리적으로 제거 → 마스크는 crop된 내부 영역에만 적용
     // 반환된 Texture2D는 호출자가 Destroy() 책임
     Texture2D Warp(Mat frame, Point2f[][] corners, int[] ids)
     {
-        Point2f[] src = GetInnerCorners(corners, ids);
+        // 외부 꼭짓점(마커 바깥 모서리) 기준 → fish0 전체 크기(마커 포함)로 워프
+        Point2f[] src = GetOuterCorners(corners, ids);
 
-        // ── 1920×1080 강제 전 자연 크기 계산 및 로그 ──────────
+        // ── 자연 크기 계산 및 로그 (외부 꼭짓점 = 용지 전체 크기) ──
         Point2f tl = src[0], tr = src[1], br = src[2], bl = src[3];
-        float naturalW = ((tr.X - tl.X + (br.X - bl.X)) / 2f);   // 상·하단 가로 평균
-        float naturalH = ((bl.Y - tl.Y + (br.Y - tr.Y)) / 2f);   // 좌·우측 세로 평균
-        // 투시 왜곡을 고려한 실제 거리(유클리드)
         float topW    = Mathf.Sqrt((tr.X-tl.X)*(tr.X-tl.X) + (tr.Y-tl.Y)*(tr.Y-tl.Y));
         float bottomW = Mathf.Sqrt((br.X-bl.X)*(br.X-bl.X) + (br.Y-bl.Y)*(br.Y-bl.Y));
         float leftH   = Mathf.Sqrt((bl.X-tl.X)*(bl.X-tl.X) + (bl.Y-tl.Y)*(bl.Y-tl.Y));
         float rightH  = Mathf.Sqrt((br.X-tr.X)*(br.X-tr.X) + (br.Y-tr.Y)*(br.Y-tr.Y));
         float avgW    = (topW + bottomW) / 2f;
         float avgH    = (leftH + rightH) / 2f;
-        Debug.Log($"[ArucoDetector] Warp 전 자연 크기 (카메라 원본 기준)\n" +
+        Debug.Log($"[ArucoDetector] Warp 전 자연 크기 (카메라 원본 기준, 외부 꼭짓점)\n" +
                   $"  Width  → 상단: {topW:F1}px / 하단: {bottomW:F1}px / 평균: {avgW:F1}px\n" +
                   $"  Height → 좌측: {leftH:F1}px / 우측: {rightH:F1}px / 평균: {avgH:F1}px");
 
-        // 워프 출력 크기: fish0 내부영역(마커 안쪽)과 동일한 픽셀 수로 생성
-        // → 마스크와 1:1 대응하여 크기 불일치 방지
+        // 워프 출력 크기: fish0 전체 크기(마커 포함) → crop 후 내부영역만 남김
         int warpW = outputWidth;
         int warpH = outputHeight;
-        if (fishMaskSource != null && fishSourceMarkerPx > 0)
+        if (fishMaskSource != null)
         {
-            int iw2 = fishMaskSource.width  - 2 * fishSourceMarkerPx;
-            int ih2 = fishMaskSource.height - 2 * fishSourceMarkerPx;
-            if (iw2 > 0 && ih2 > 0)
-            {
-                warpW = iw2;
-                warpH = ih2;
-                Debug.Log($"[ArucoDetector] 워프 출력 크기: fish0 내부영역 {warpW}×{warpH}px");
-            }
+            warpW = fishMaskSource.width;
+            warpH = fishMaskSource.height;
+            Debug.Log($"[ArucoDetector] 워프 출력 크기: fish0 전체 {warpW}×{warpH}px (마커 포함)");
         }
 
         Point2f[] dst = {
@@ -296,14 +333,10 @@ public class ArucoDetector : MonoBehaviour
         Cv2.WarpPerspective(frame, warped, M,
             new OpenCvSharp.Size(warpW, warpH));
 
-        // 마스크는 회전 완료 후 적용 (회전 전 적용 시 alpha 채널도 함께 회전되어 방향 불일치)
+        // 회전 완료 후 crop + 마스크 적용
         int anchorPos = FindAnchorOffset(corners, ids);
         if (anchorPos == 0)
-        {
-            ApplyReferenceMask(warped);
-            Debug.Log($"[ArucoDetector] 최종 출력: {warped.Cols}×{warped.Rows}px (회전 없음)");
-            return MatToTexture2D(warped);
-        }
+            return CropAndMask(warped, "회전 없음");
 
         // RotateFlags: Rotate90Clockwise=0, Rotate180=1, Rotate90Counterclockwise=2
         RotateFlags flag = anchorPos == 1 ? (RotateFlags)2
@@ -313,20 +346,40 @@ public class ArucoDetector : MonoBehaviour
         using Mat rotated = new Mat();
         Cv2.Rotate(warped, rotated, flag);
 
-        // 90°/270° 회전 시 가로↔세로 교환 → warpW×warpH로 리사이즈 후 마스크 적용
+        // 90°/270° 회전 시 가로↔세로 교환 → warpW×warpH로 리사이즈
         if (anchorPos == 1 || anchorPos == 3)
         {
             Debug.Log($"[ArucoDetector] 회전({rotLabels[anchorPos]}) 후 리사이즈 전: " +
-                      $"{rotated.Cols}×{rotated.Rows}px → 최종: {warpW}×{warpH}px");
+                      $"{rotated.Cols}×{rotated.Rows}px → {warpW}×{warpH}px");
             using Mat resized = new Mat();
             Cv2.Resize(rotated, resized, new OpenCvSharp.Size(warpW, warpH));
-            ApplyReferenceMask(resized);
-            return MatToTexture2D(resized);
+            return CropAndMask(resized, rotLabels[anchorPos]);
         }
 
-        ApplyReferenceMask(rotated);
-        Debug.Log($"[ArucoDetector] 최종 출력: {rotated.Cols}×{rotated.Rows}px ({rotLabels[anchorPos]} 회전)");
-        return MatToTexture2D(rotated);
+        return CropAndMask(rotated, rotLabels[anchorPos]);
+    }
+
+    // ── 마커 크기(fishSourceMarkerPx)만큼 상하좌우 crop → Fish0 마스크 → Texture2D ──
+    // crop = 마커를 물리적으로 제거하는 가장 확실한 방법
+    // crop 후 크기: (fish0전체 - 2×마커크기) = 2634×1606 (fish0 내부영역과 일치)
+    Texture2D CropAndMask(Mat mat, string rotLabel)
+    {
+        int ms = (fishMaskSource != null && fishSourceMarkerPx > 0) ? fishSourceMarkerPx : 0;
+        int cropW = mat.Cols - 2 * ms;
+        int cropH = mat.Rows - 2 * ms;
+
+        if (ms > 0 && cropW > 0 && cropH > 0)
+        {
+            using Mat cropped = new Mat(mat, new Rect(ms, ms, cropW, cropH));
+            ApplyReferenceMask(cropped);
+            Debug.Log($"[ArucoDetector] 최종 출력: {cropW}×{cropH}px ({rotLabel}, 마커 {ms}px crop)");
+            return MatToTexture2D(cropped);
+        }
+
+        // fallback: crop 불가 시 원본 크기로 마스크만 적용
+        ApplyReferenceMask(mat);
+        Debug.Log($"[ArucoDetector] 최종 출력: {mat.Cols}×{mat.Rows}px ({rotLabel}, crop 없음)");
+        return MatToTexture2D(mat);
     }
 
     // ── ID%4==0 마커 위치 → 회전 오프셋 반환 ────────────────
