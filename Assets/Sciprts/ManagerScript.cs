@@ -233,8 +233,6 @@ public class ManagerScripts : MonoBehaviour
         scannerManager.ftpUser = myData.ftpUser;
         scannerManager.ftpPassword = myData.ftpPassword;
 
-        arucoDetector.backgroundThreshold = myData.backgroundThreshold;
-
         ResetTime = myData.ResetTime;
     }
 }
