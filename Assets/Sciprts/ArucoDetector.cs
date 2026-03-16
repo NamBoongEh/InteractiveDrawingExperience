@@ -19,12 +19,18 @@ public class ArucoDetector : MonoBehaviour
     public UnityEngine.UI.RawImage overlayView;
     public UnityEngine.UI.Text failureText; // 생성 실패 시 안내 문구
 
+    [Header("Fish Mask Settings")]
+    public Texture2D fishMaskSource;                  // Inspector에서 Fish/fish0 할당
+    [Tooltip("fish0.png 내 마커 1개의 픽셀 크기 — 내부영역 = (파일크기 - 2×마커크기)")]
+    public int fishSourceMarkerPx = 378;              // 내부: 3390-756=2634, 2362-756=1606
+
     public event Action<Texture2D, int> OnAllMarkersDetected;
 
     private WebCamCapture cam;
     private ArucoDict arucoDict;
     private DetectorParameters detParams;
     private float holdTimer = 0f;
+    private Mat _cachedFishMask;                      // BuildFishMask() 결과 캐시
 
     // ── 초기화 ────────────────────────────────────────────────
     void Start()
@@ -33,13 +39,24 @@ public class ArucoDetector : MonoBehaviour
         arucoDict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict4X4_50);
         detParams = DetectorParameters.Create();
         SetFailureMessage(null);
+
+        // Inspector 미할당 시 Resources에서 자동 로드
+        if (fishMaskSource == null)
+        {
+            fishMaskSource = Resources.Load<Texture2D>("Fish/fish0");
+            if (fishMaskSource == null)
+                Debug.LogWarning("[ArucoDetector] Fish/fish0 텍스처를 Resources에서 찾을 수 없습니다. fallback 마스킹 사용.");
+            else
+                Debug.Log("[ArucoDetector] Fish/fish0 텍스처 자동 로드 완료.");
+        }
     }
 
-    // ── 종료 시 UI 텍스처 정리 ───────────────────────────────
+    // ── 종료 시 UI 텍스처·캐시 정리 ─────────────────────────
     void OnDestroy()
     {
         if (overlayView != null && overlayView.texture != null)
             Destroy(overlayView.texture);
+        _cachedFishMask?.Dispose();
     }
 
     // ── 매 프레임 감지 ────────────────────────────────────────
@@ -228,8 +245,9 @@ public class ArucoDetector : MonoBehaviour
         return ids[0]; // fallback
     }
 
-    // ── 퍼스펙티브 워프 + 배경 제거 + 회전 보정 → Texture2D ──
-    // 항상 outputWidth×outputHeight(1920×1080) 크기로 반환
+    // ── 퍼스펙티브 워프 → 회전 보정 → Fish0 마스크 ──
+    // 처리 순서: 4점 퍼스펙티브 변환 → 회전(ID%4==0 좌상단) → Fish0 마스크(배경 투명화 포함)
+    // warpedInner = 실제 감지된 내부꼭짓점 위치 → Fish0 동적 정렬로 그림·마스크 일치 보장
     // 반환된 Texture2D는 호출자가 Destroy() 책임
     Texture2D Warp(Mat frame, Point2f[][] corners, int[] ids)
     {
@@ -250,23 +268,39 @@ public class ArucoDetector : MonoBehaviour
                   $"  Width  → 상단: {topW:F1}px / 하단: {bottomW:F1}px / 평균: {avgW:F1}px\n" +
                   $"  Height → 좌측: {leftH:F1}px / 우측: {rightH:F1}px / 평균: {avgH:F1}px");
 
+        // 워프 출력 크기: fish0 내부영역(마커 안쪽)과 동일한 픽셀 수로 생성
+        // → 마스크와 1:1 대응하여 크기 불일치 방지
+        int warpW = outputWidth;
+        int warpH = outputHeight;
+        if (fishMaskSource != null && fishSourceMarkerPx > 0)
+        {
+            int iw2 = fishMaskSource.width  - 2 * fishSourceMarkerPx;
+            int ih2 = fishMaskSource.height - 2 * fishSourceMarkerPx;
+            if (iw2 > 0 && ih2 > 0)
+            {
+                warpW = iw2;
+                warpH = ih2;
+                Debug.Log($"[ArucoDetector] 워프 출력 크기: fish0 내부영역 {warpW}×{warpH}px");
+            }
+        }
+
         Point2f[] dst = {
-            new Point2f(0,           0),
-            new Point2f(outputWidth, 0),
-            new Point2f(outputWidth, outputHeight),
-            new Point2f(0,           outputHeight)
+            new Point2f(0,      0),
+            new Point2f(warpW,  0),
+            new Point2f(warpW,  warpH),
+            new Point2f(0,      warpH)
         };
 
         using Mat M = Cv2.GetPerspectiveTransform(src, dst);
         using Mat warped = new Mat();
         Cv2.WarpPerspective(frame, warped, M,
-            new OpenCvSharp.Size(outputWidth, outputHeight));
+            new OpenCvSharp.Size(warpW, warpH));
 
-        ApplyReferenceMask(warped);
-
+        // 마스크는 회전 완료 후 적용 (회전 전 적용 시 alpha 채널도 함께 회전되어 방향 불일치)
         int anchorPos = FindAnchorOffset(corners, ids);
         if (anchorPos == 0)
         {
+            ApplyReferenceMask(warped);
             Debug.Log($"[ArucoDetector] 최종 출력: {warped.Cols}×{warped.Rows}px (회전 없음)");
             return MatToTexture2D(warped);
         }
@@ -279,17 +313,18 @@ public class ArucoDetector : MonoBehaviour
         using Mat rotated = new Mat();
         Cv2.Rotate(warped, rotated, flag);
 
-        // 90°/270° 회전 시 가로↔세로 교환 → 항상 1920×1080으로 리사이즈
+        // 90°/270° 회전 시 가로↔세로 교환 → warpW×warpH로 리사이즈 후 마스크 적용
         if (anchorPos == 1 || anchorPos == 3)
         {
             Debug.Log($"[ArucoDetector] 회전({rotLabels[anchorPos]}) 후 리사이즈 전: " +
-                      $"{rotated.Cols}×{rotated.Rows}px → 최종: {outputWidth}×{outputHeight}px");
+                      $"{rotated.Cols}×{rotated.Rows}px → 최종: {warpW}×{warpH}px");
             using Mat resized = new Mat();
-            Cv2.Resize(rotated, resized,
-                new OpenCvSharp.Size(outputWidth, outputHeight));
+            Cv2.Resize(rotated, resized, new OpenCvSharp.Size(warpW, warpH));
+            ApplyReferenceMask(resized);
             return MatToTexture2D(resized);
         }
 
+        ApplyReferenceMask(rotated);
         Debug.Log($"[ArucoDetector] 최종 출력: {rotated.Cols}×{rotated.Rows}px ({rotLabels[anchorPos]} 회전)");
         return MatToTexture2D(rotated);
     }
@@ -325,47 +360,134 @@ public class ArucoDetector : MonoBehaviour
         return 0; // fallback
     }
 
-    // ── 스캔 이미지에서 실루엣 추출 → alpha 채널 적용 (배경 투명화) ──
-    // 1/4 다운스케일 처리로 고속화 (~10ms @ 480×270)
+    // ── fish0 기반 마스크 적용 (fallback: 스캔 자체 실루엣) ────
+    // fish0.png 마커 내부 영역을 워프 출력 크기로 스케일 → 실루엣 마스크 생성
     void ApplyReferenceMask(Mat rgba)
     {
+        // fish0 마스크 캐시 구축 (최초 1회)
+        if (fishMaskSource != null && (_cachedFishMask == null || _cachedFishMask.Empty()))
+            _cachedFishMask = BuildFishMask(rgba.Cols, rgba.Rows);
+
+        if (_cachedFishMask != null && !_cachedFishMask.Empty())
+        {
+            Cv2.MixChannels(new[] { _cachedFishMask }, new[] { rgba }, new[] { 0, 3 });
+            return;
+        }
+
+        // ── fallback: 스캔 이미지 자체에서 실루엣 추출 ──────
         const int scale = 4;
         int sw = rgba.Cols / scale;
         int sh = rgba.Rows / scale;
 
-        // 1/4 다운스케일
         using Mat small = new Mat();
         Cv2.Resize(rgba, small, new OpenCvSharp.Size(sw, sh));
 
-        // 그레이스케일 + BinaryInv: 윤곽선·채색(어두운 픽셀) → 255, 흰 배경 → 0
         using Mat gray = new Mat();
         Cv2.CvtColor(small, gray, ColorConversionCodes.RGBA2GRAY);
         using Mat binary = new Mat();
         Cv2.Threshold(gray, binary, backgroundThreshold, 255, ThresholdTypes.BinaryInv);
 
-        // Dilation: 다운스케일로 끊긴 윤곽선 틈새 메우기
         using Mat kernel = Cv2.GetStructuringElement(
             MorphShapes.Ellipse, new OpenCvSharp.Size(7, 7));
-        Cv2.Dilate(binary, binary, kernel);
+        Cv2.MorphologyEx(binary, binary, MorphTypes.Close, kernel);
 
-        // 외곽 윤곽선 탐지 + 일정 크기 이상의 윤곽선 내부 채우기
         Cv2.FindContours(binary, out Point[][] contours, out _,
             RetrievalModes.External, ContourApproximationModes.ApproxSimple);
 
         using Mat silSmall = new Mat(sh, sw, MatType.CV_8UC1, new Scalar(0));
-        double minArea = sw * sh * 0.001; // 전체 면적의 0.1% 이상만
+        double minArea = sw * sh * 0.001;
         for (int i = 0; i < contours.Length; i++)
             if (Cv2.ContourArea(contours[i]) >= minArea)
                 Cv2.DrawContours(silSmall, contours, i, new Scalar(255), thickness: -1);
 
-        // 원본 크기로 업스케일 (Nearest: 경계 선명 유지)
         using Mat silhouette = new Mat();
         Cv2.Resize(silSmall, silhouette,
             new OpenCvSharp.Size(rgba.Cols, rgba.Rows),
             interpolation: InterpolationFlags.Nearest);
 
-        // alpha 채널(ch3) 교체 → 실루엣 내부 불투명, 외부 투명
         Cv2.MixChannels(new[] { silhouette }, new[] { rgba }, new[] { 0, 3 });
+    }
+
+    // ── fish0.png → 워프 출력 크기 실루엣 마스크 생성 ────────
+    // 마커 내부 영역(fishSourceMarkerPx 기준)만 크롭 후 targetW×targetH로 리사이즈
+    // 반환된 Mat은 _cachedFishMask에 저장되며 OnDestroy에서 Dispose됨
+    Mat BuildFishMask(int targetW, int targetH)
+    {
+        int fw = fishMaskSource.width;
+        int fh = fishMaskSource.height;
+
+        // Texture2D → RGBA Mat (GetPixels32: 플랫폼 독립적 RGBA)
+        Color32[] pixels = fishMaskSource.GetPixels32();
+        byte[] raw = new byte[pixels.Length * 4];
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            raw[i * 4    ] = pixels[i].r;
+            raw[i * 4 + 1] = pixels[i].g;
+            raw[i * 4 + 2] = pixels[i].b;
+            raw[i * 4 + 3] = pixels[i].a;
+        }
+        using Mat fishMat = new Mat(fh, fw, MatType.CV_8UC4);
+        Marshal.Copy(raw, 0, fishMat.Data, raw.Length);
+        Cv2.Flip(fishMat, fishMat, FlipMode.X); // Unity Y축 반전 복원
+
+        // 마커 내부 영역 크롭 (inner corner = 마커 크기만큼 안쪽)
+        int ms = fishSourceMarkerPx;
+        int iw = fw - 2 * ms;
+        int ih = fh - 2 * ms;
+        if (iw <= 0 || ih <= 0)
+        {
+            Debug.LogError($"[ArucoDetector] fishSourceMarkerPx({ms})가 너무 커 내부 영역 없음 (fish0: {fw}×{fh})");
+            return null;
+        }
+
+        float scaleX = (float)targetW / iw;
+        float scaleY = (float)targetH / ih;
+        Debug.Log($"[ArucoDetector] Fish0 마스크 스케일 — " +
+                  $"내부영역: {iw}×{ih}px → 출력: {targetW}×{targetH}px " +
+                  $"(scaleX={scaleX:F3}, scaleY={scaleY:F3})");
+
+        using Mat fishInner = new Mat(fishMat, new Rect(ms, ms, iw, ih));
+
+        // 마커 크기 기반 스케일 적용 → 워프 출력 크기로 리사이즈
+        using Mat fishResized = new Mat();
+        Cv2.Resize(fishInner, fishResized, new OpenCvSharp.Size(targetW, targetH));
+
+        // 실루엣 추출: alpha 채널 우선 사용 (투명 배경 PNG), 없으면 RGB 임계값
+        // 주의: 흰 배경 PNG는 Unity에서 alpha=255 전체 → maxA>10 이지만 실제 투명도 없음
+        //       minA < 245 확인으로 진짜 투명 배경 여부 판별
+        using Mat alphaChannel = new Mat();
+        Cv2.ExtractChannel(fishResized, alphaChannel, 3);
+        Cv2.MinMaxLoc(alphaChannel, out double minA, out double maxA);
+        bool hasTransparentBg = (maxA - minA) > 50; // 의미 있는 alpha 변동 = 투명 배경 존재
+
+        using Mat binary = new Mat();
+        if (hasTransparentBg)
+        {
+            Cv2.Threshold(alphaChannel, binary, 127, 255, ThresholdTypes.Binary);
+            Debug.Log($"[ArucoDetector] Fish0 마스크: alpha 채널 사용 (min={minA:F0}, max={maxA:F0})");
+        }
+        else // alpha=255 전체(흰 배경 PNG) → RGB 기반 임계값
+        {
+            using Mat gray = new Mat();
+            Cv2.CvtColor(fishResized, gray, ColorConversionCodes.RGBA2GRAY);
+            Cv2.Threshold(gray, binary, backgroundThreshold, 255, ThresholdTypes.BinaryInv);
+            Debug.Log($"[ArucoDetector] Fish0 마스크: RGB 임계값 사용 (alpha min={minA:F0}, max={maxA:F0}, 투명배경 없음)");
+        }
+
+        using Mat kernel = Cv2.GetStructuringElement(
+            MorphShapes.Ellipse, new OpenCvSharp.Size(7, 7));
+        Cv2.MorphologyEx(binary, binary, MorphTypes.Close, kernel);
+
+        Cv2.FindContours(binary, out Point[][] contours, out _,
+            RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+
+        Mat mask = new Mat(targetH, targetW, MatType.CV_8UC1, new Scalar(0));
+        double minArea = targetW * targetH * 0.001;
+        for (int i = 0; i < contours.Length; i++)
+            if (Cv2.ContourArea(contours[i]) >= minArea)
+                Cv2.DrawContours(mask, contours, i, new Scalar(255), thickness: -1);
+
+        return mask; // _cachedFishMask에 저장, OnDestroy에서 Dispose
     }
 
     // ── 마커 내부 영역 크기 디버그 출력 ──────────────────────
