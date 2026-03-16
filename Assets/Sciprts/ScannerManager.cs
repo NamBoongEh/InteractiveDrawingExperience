@@ -53,6 +53,7 @@ public class ScannerManager : MonoBehaviour
 
         // ── 직접 저장 (FTP 없이) ─────────────────────────────
         byte[] pngBytes = warped.EncodeToPNG();
+        Destroy(warped);
         await Task.Run(() => File.WriteAllBytes(fullPath, pngBytes));
         Debug.Log($"[저장] {fullPath}");
 
