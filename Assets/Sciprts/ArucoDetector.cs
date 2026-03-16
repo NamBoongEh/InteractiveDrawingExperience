@@ -290,9 +290,9 @@ public class ArucoDetector : MonoBehaviour
         return ids[0]; // fallback
     }
 
-    // ── 퍼스펙티브 워프 → 회전 보정 → 마커 crop → Fish0 마스크 ──
-    // 처리 순서: 외부꼭짓점 4점 변환(fish0 전체크기) → 회전 → 마커 378px 상하좌우 crop → Fish0 마스크
-    // crop으로 마커를 물리적으로 제거 → 마스크는 crop된 내부 영역에만 적용
+    // ── 퍼스펙티브 워프 → 회전 보정 → Fish0 마스크 → crop ──
+    // 처리 순서: 외부꼭짓점 4점 변환(fish0 전체크기) → 회전 → Fish0 마스크(전체 적용) → 378px 상하좌우 crop
+    // 마스크 후 crop: 마커 영역을 물리적으로 제거, 최종 출력 = fish0 내부영역(2634×1606)
     // 반환된 Texture2D는 호출자가 Destroy() 책임
     Texture2D Warp(Mat frame, Point2f[][] corners, int[] ids)
     {
