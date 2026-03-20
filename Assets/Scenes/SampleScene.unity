@@ -499,6 +499,7 @@ GameObject:
   m_Component:
   - component: {fileID: 565746026}
   - component: {fileID: 565746027}
+  - component: {fileID: 565746028}
   m_Layer: 0
   m_Name: ArucoDetector
   m_TagString: Untagged
@@ -533,11 +534,29 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 54229849e89579c49b8523f16630af56, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  outputWidth: 3508
-  outputHeight: 2480
   holdDurationToCapture: 1.5
+  useAISegmentation: 1
+  aiSegModel: {fileID: 5022602860645237092, guid: 9157b418c6f71cf4881bd174fe0c5df7, type: 3}
+  aiBackend: 256
+  aiInputSize: 320
+  aiThreshold: 0.0341
+  aiCenterSigma: 0.041
+  aiMaskErodePx: 1
+  aiHoleFill: 1
   overlayView: {fileID: 616127336}
   failureText: {fileID: 472110954}
+--- !u!114 &565746028
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 565746025}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4259015a1e87d594c827a1192842a632, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1 &616127334
 GameObject:
   m_ObjectHideFlags: 0
@@ -573,7 +592,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 0}
-  m_AnchoredPosition: {x: -1113, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 960, y: 540}
   m_Pivot: {x: 0, y: 0}
 --- !u!114 &616127336
@@ -674,8 +693,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 526897d7555451e48800b028440a335f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  wallIP: 192.168.0.100
+  wallIP: 192.168.0.2
   wallPort: 11116
+  listenPort: 11116
+  onMessageReceived:
+    m_PersistentCalls:
+      m_Calls: []
 --- !u!114 &687297670
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -739,7 +762,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 9c76c1ea397b84b47af0673bb45c7415, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  iterations: 5
+  iterations: 6
   marginPercent: 10
 --- !u!1 &861261067
 GameObject:
