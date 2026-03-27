@@ -306,7 +306,7 @@ MonoBehaviour:
     m_PressedTrigger: Pressed
     m_SelectedTrigger: Selected
     m_DisabledTrigger: Disabled
-  m_Interactable: 1
+  m_Interactable: 0
   m_TargetGraphic: {fileID: 313267725}
   m_OnClick:
     m_PersistentCalls:
@@ -409,6 +409,8 @@ MonoBehaviour:
   reqWidth: 1920
   reqHeight: 1080
   reqFPS: 30
+  zoomFactor: 1
+  zoomStep: 0.1
   previewImage: {fileID: 861261069}
 --- !u!1 &472110952
 GameObject:
@@ -535,6 +537,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   holdDurationToCapture: 1.5
+  fishOutputSizes: []
   useAISegmentation: 1
   aiSegModel: {fileID: 5022602860645237092, guid: 9157b418c6f71cf4881bd174fe0c5df7, type: 3}
   aiBackend: 256
@@ -543,6 +546,14 @@ MonoBehaviour:
   aiCenterSigma: 0.041
   aiMaskErodePx: 1
   aiHoleFill: 1
+  useContourSegmentation: 1
+  contourAdaptBlock: 151
+  contourAdaptC: 35
+  contourDilatePx: 2
+  contourErodePx: 1
+  contourClosePx: 10
+  contourPreSmoothPx: 0
+  saveDebugImages: 1
   overlayView: {fileID: 616127336}
   failureText: {fileID: 472110954}
 --- !u!114 &565746028
@@ -677,7 +688,6 @@ Transform:
   - {fileID: 1015108678}
   - {fileID: 323850109}
   - {fileID: 565746026}
-  - {fileID: 803431587}
   - {fileID: 1965620712}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
@@ -694,8 +704,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   wallIP: 192.168.0.2
-  wallPort: 11116
-  listenPort: 11116
+  port: 9000
   onMessageReceived:
     m_PersistentCalls:
       m_Calls: []
@@ -713,57 +722,11 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   ResetSwitch: 0
   ResetTotalTime: 0
-  ResetTime: 120
+  resetTime: 120
   log: {fileID: 1341256744}
   udpTextSender: {fileID: 687297669}
   scannerManager: {fileID: 1015108679}
   arucoDetector: {fileID: 565746027}
---- !u!1 &803431586
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 803431587}
-  - component: {fileID: 803431588}
-  m_Layer: 0
-  m_Name: BackgroundRemover
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &803431587
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 803431586}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 687297668}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &803431588
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 803431586}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9c76c1ea397b84b47af0673bb45c7415, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  iterations: 6
-  marginPercent: 10
 --- !u!1 &861261067
 GameObject:
   m_ObjectHideFlags: 0

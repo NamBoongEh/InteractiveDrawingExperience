@@ -31,13 +31,25 @@ public class ScannerManager : MonoBehaviour
 
     void Start()
     {
+        scanButton.interactable = true;
         webCam.StartCamera();
         arucoDetector.OnAllMarkersDetected += HandleMarkersDetected;
         SetState(ScannerState.Idle);
     }
 
+    void Update()
+    {
+        // Enter 키(Return 또는 NumpadEnter)로 스캔 버튼과 동일하게 동작
+        if ((Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
+            && scanButton.interactable)
+        {
+            StartScanning();
+        }
+    }
+
     public void StartScanning()
     {
+        scanButton.interactable = false;
         if (State != ScannerState.Idle) return;
         SetState(ScannerState.Scanning);
     }
@@ -84,6 +96,7 @@ public class ScannerManager : MonoBehaviour
         if (sent)
         {
             await Task.Delay(2000);
+            scanButton.interactable = true;
             SetState(ScannerState.Idle);
         }
     }

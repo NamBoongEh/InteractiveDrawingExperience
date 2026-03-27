@@ -1,10 +1,12 @@
 {
-  "wallIP": "192.168.0.2",
-  "wallPort": 11116,
+  "wallIP": "192.168.0.136",
+  "port": 11115,
   "ftpHost": "192.168.0.32",
   "ftpPort": 21,
   "ftpUser": "ftpuser",
   "ftpPassword": "1234",
-  "backgroundThreshold": 120,
-  "ResetTime": 120.0
+  "resetTime": 120.0,
+  "saturation": 2,
+  "contrast": 1.1,
+  "brightness": 1.3
 }

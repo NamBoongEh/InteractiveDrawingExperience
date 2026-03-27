@@ -11,13 +11,12 @@ public class ManagerScripts : MonoBehaviour
     public class Data
     {
         public string wallIP;
-        public int wallPort;
+        public int port;
         public string ftpHost;
         public int ftpPort;
         public string ftpUser;
         public string ftpPassword;
-        public float ResetTime;
-        public int backgroundThreshold;
+        public float resetTime;
     }
 
     Dictionary<KeyCode, Action> keyDictionary;
@@ -33,7 +32,7 @@ public class ManagerScripts : MonoBehaviour
     //리셋
     [SerializeField] bool ResetSwitch = false;
     [SerializeField] private float ResetTotalTime = 0.0f;
-    [SerializeField] float ResetTime = 120.0f;
+    [SerializeField] float resetTime = 120.0f;
 
     //로그
     [SerializeField] GameObject log;
@@ -67,6 +66,8 @@ public class ManagerScripts : MonoBehaviour
             { KeyCode.F12, KeyboardPrefabSave },
             { KeyCode.Escape, KeyboardQuit },
         };
+
+        logText = log.GetComponent<Text>();
     }
 
     private void Update()
@@ -91,7 +92,7 @@ public class ManagerScripts : MonoBehaviour
         {
             ResetTotalTime += Time.deltaTime;
 
-            if (ResetTotalTime >= ResetTime)
+            if (ResetTotalTime >= resetTime)
                 ResetAll();
         }
 
@@ -226,13 +227,13 @@ public class ManagerScripts : MonoBehaviour
         Data myData = JsonUtility.FromJson<Data>(FromJsonData);
 
         udpTextSender.wallIP = myData.wallIP;
-        udpTextSender.wallPort = myData.wallPort;
+        udpTextSender.port = myData.port;
 
         scannerManager.ftpHost = myData.ftpHost;
         scannerManager.ftpPort = myData.ftpPort;
         scannerManager.ftpUser = myData.ftpUser;
         scannerManager.ftpPassword = myData.ftpPassword;
 
-        ResetTime = myData.ResetTime;
+        resetTime = myData.resetTime;
     }
 }

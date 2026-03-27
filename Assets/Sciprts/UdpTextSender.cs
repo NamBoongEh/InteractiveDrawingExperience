@@ -9,68 +9,39 @@ using System.Threading.Tasks;
 
 public class UdpTextSender : MonoBehaviour
 {
-    [Header("송신 (Send)")]
-    public string wallIP   = "192.168.1.100";
-    public int    wallPort = 9000;
+    [Header("UDP (송수신 공용)")]
+    public string wallIP = "192.168.1.100";
+    [Tooltip("송신·수신 모두 이 포트를 사용합니다.")]
+    public int port = 9000;
 
-    [Header("수신 (Receive)")]
-    [Tooltip("이 PC에서 수신 대기할 포트. 0 = 수신 비활성화.")]
-    public int  listenPort   = 9001;
-    [Tooltip("수신된 메시지를 메인 스레드에서 처리할 이벤트.")]
+    [Tooltip("수신된 메시지를 처리할 이벤트.")]
     public UnityEvent<string> onMessageReceived;
 
-    // ── 송신 ──────────────────────────────────────────────────
-    private UdpClient  _sendClient;
+    // ── 공용 클라이언트 ────────────────────────────────────────
+    private UdpClient  _udpClient;
     private IPEndPoint _wallEndPoint;
 
-    // ── 수신 ──────────────────────────────────────────────────
-    private UdpClient         _recvClient;
-    private Thread            _recvThread;
+    // ── 수신 스레드 ────────────────────────────────────────────
+    private Thread               _recvThread;
     private CancellationTokenSource _cts;
-
-    // 수신 메시지를 메인 스레드로 전달하는 큐
-    private readonly System.Collections.Generic.Queue<string> _recvQueue
-        = new System.Collections.Generic.Queue<string>();
-    private readonly object _queueLock = new object();
 
     // ── 초기화 ────────────────────────────────────────────────
     void Start()
     {
-        // 송신 클라이언트
-        _sendClient  = new UdpClient();
-        _wallEndPoint = new IPEndPoint(IPAddress.Parse(wallIP), wallPort);
+        _wallEndPoint = new IPEndPoint(IPAddress.Parse(wallIP), port);
 
-        // 수신 클라이언트
-        if (listenPort > 0)
+        try
         {
-            try
-            {
-                _recvClient = new UdpClient(listenPort);
-                _cts        = new CancellationTokenSource();
-                _recvThread = new Thread(ReceiveLoop) { IsBackground = true };
-                _recvThread.Start();
-                Debug.Log($"[UDP] 수신 대기 시작: 포트 {listenPort}");
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"[UDP] 수신 클라이언트 생성 실패 (port={listenPort}): {e.Message}");
-            }
+            // 포트에 바인딩 → 수신 가능 / 동일 소켓으로 송신도 가능
+            _udpClient = new UdpClient(port);
+            _cts       = new CancellationTokenSource();
+            _recvThread = new Thread(ReceiveLoop) { IsBackground = true };
+            _recvThread.Start();
+            Debug.Log($"[UDP] 포트 {port}  송수신 시작  →  {wallIP}:{port}");
         }
-    }
-
-    // ── 매 프레임: 수신 큐 → 메인 스레드 이벤트 발행 ─────────
-    void Update()
-    {
-        while (true)
+        catch (Exception e)
         {
-            string msg;
-            lock (_queueLock)
-            {
-                if (_recvQueue.Count == 0) break;
-                msg = _recvQueue.Dequeue();
-            }
-            Debug.Log($"[UDP] 수신: {msg}");
-            onMessageReceived?.Invoke(msg);
+            Debug.LogError($"[UDP] 초기화 실패 (port={port}): {e.Message}");
         }
     }
 
@@ -82,14 +53,14 @@ public class UdpTextSender : MonoBehaviour
         {
             try
             {
-                byte[] data = _recvClient.Receive(ref remote);
+                byte[] data = _udpClient.Receive(ref remote);
                 string msg  = Encoding.UTF8.GetString(data);
-                lock (_queueLock)
-                    _recvQueue.Enqueue(msg);
+                Debug.Log($"[UDP] 수신: {msg}");
+                onMessageReceived?.Invoke(msg);
             }
             catch (SocketException)
             {
-                // 소켓 닫힘 (OnDestroy 호출) → 정상 종료
+                // 소켓 닫힘 (OnDestroy) → 정상 종료
                 break;
             }
             catch (Exception e)
@@ -105,7 +76,7 @@ public class UdpTextSender : MonoBehaviour
         try
         {
             byte[] data = Encoding.UTF8.GetBytes(message);
-            await _sendClient.SendAsync(data, data.Length, _wallEndPoint);
+            await _udpClient.SendAsync(data, data.Length, _wallEndPoint);
             Debug.Log($"[UDP] 송신 완료: {message}");
             return true;
         }
@@ -120,7 +91,7 @@ public class UdpTextSender : MonoBehaviour
     void OnDestroy()
     {
         _cts?.Cancel();
-        _recvClient?.Close();  // Receive() 블로킹 해제
-        _sendClient?.Close();
+        _udpClient?.Close();               // Close()가 Receive() 블로킹 해제
+        _recvThread?.Join(500);            // 최대 500ms 스레드 종료 대기
     }
 }
