@@ -410,7 +410,7 @@ MonoBehaviour:
   reqHeight: 1080
   reqFPS: 30
   zoomFactor: 1
-  zoomStep: 0.1
+  zoomStep: 0
   previewImage: {fileID: 861261069}
 --- !u!1 &472110952
 GameObject:
@@ -538,21 +538,17 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   holdDurationToCapture: 1.5
   fishOutputSizes: []
-  useAISegmentation: 1
   aiSegModel: {fileID: 5022602860645237092, guid: 9157b418c6f71cf4881bd174fe0c5df7, type: 3}
   aiBackend: 256
-  aiInputSize: 320
-  aiThreshold: 0.0341
-  aiCenterSigma: 0.041
-  aiMaskErodePx: 1
+  aiThreshold: 0.4
+  aiCenterSigma: 0.3
+  aiMaskErodePx: 35
   aiHoleFill: 1
-  useContourSegmentation: 1
-  contourAdaptBlock: 151
-  contourAdaptC: 35
-  contourDilatePx: 2
-  contourErodePx: 1
-  contourClosePx: 10
-  contourPreSmoothPx: 0
+  useInkLineClip: 1
+  inkInkThresh: 50
+  tmMinScale: 0.8
+  tmMaxScale: 1.15
+  tmScaleSteps: 15
   saveDebugImages: 1
   overlayView: {fileID: 616127336}
   failureText: {fileID: 472110954}

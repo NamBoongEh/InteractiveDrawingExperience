@@ -4,11 +4,6 @@ using UnityEngine.UI;
 using OpenCvSharp;
 using System.Runtime.InteropServices;
 
-/// <summary>
-/// WebCamTexture 기반 캡처.
-/// DirectShow 협상 실패 시 해상도/FPS를 단계적으로 낮추는 fallback 체인 적용.
-/// Razer Kiyo X 최대: 1920×1080 (4K 불가).
-/// </summary>
 public class WebCamCapture : MonoBehaviour
 {
     [Header("Camera Settings")]
@@ -16,7 +11,8 @@ public class WebCamCapture : MonoBehaviour
     [Tooltip("Razer Kiyo X 최대: 1920")]
     public int reqWidth  = 1920;
     public int reqHeight = 1080;
-    [Tooltip("0 = OS 자동 선택 (권장). 수동 지정 시 DirectShow 협상 실패 가능.")]
+    [Tooltip("항상 0 고정 (OS 자동 선택). FPS 수동 지정 시 DirectShow 협상 실패.")]
+    [HideInInspector]
     public int reqFPS    = 0;
 
     [Header("Digital Zoom")]
@@ -53,16 +49,16 @@ public class WebCamCapture : MonoBehaviour
     // ── Fallback 체인: 해상도 / FPS 조합을 순서대로 시도 ─────
     IEnumerator StartWithFallback(string camName)
     {
-        // (width, height, fps) — fps=0 은 OS 자동 선택
-        var candidates = new (int w, int h, int fps)[]
+        // fps는 항상 0(OS 자동) — 수동 FPS 지정 시 DirectShow "Could not start graph" 오류 발생
+        var candidates = new (int w, int h)[]
         {
-            (reqWidth, reqHeight, reqFPS),   // 사용자 요청
-            (1920, 1080, 0),                 // FHD, FPS 자동
-            (1280,  720, 0),                 // HD,  FPS 자동
-            (640,   480, 0),                 // VGA, FPS 자동
+            (reqWidth, reqHeight),  // 사용자 요청
+            (1920, 1080),           // FHD
+            (1280,  720),           // HD
+            ( 640,  480),           // VGA
         };
 
-        foreach (var (w, h, fps) in candidates)
+        foreach (var (w, h) in candidates)
         {
             // 이전 시도 정리
             if (CamTexture != null)
@@ -72,9 +68,7 @@ public class WebCamCapture : MonoBehaviour
                 yield return null; // 한 프레임 대기 후 재시도
             }
 
-            CamTexture = fps > 0
-                ? new WebCamTexture(camName, w, h, fps)
-                : new WebCamTexture(camName, w, h);
+            CamTexture = new WebCamTexture(camName, w, h);
             CamTexture.filterMode = FilterMode.Bilinear;
             CamTexture.Play();
 
@@ -91,12 +85,11 @@ public class WebCamCapture : MonoBehaviour
 
             if (CamTexture.width > 16)
             {
-                Debug.Log($"[WebCam] ✓ 실제: {CamTexture.width}×{CamTexture.height}  " +
-                          $"(요청={w}×{h} fps={fps})");
+                Debug.Log($"[WebCam] ✓ 실제: {CamTexture.width}×{CamTexture.height}  (요청={w}×{h})");
                 yield break;
             }
 
-            Debug.LogWarning($"[WebCam] 실패: {w}×{h} fps={fps} → 다음 설정 시도");
+            Debug.LogWarning($"[WebCam] 실패: {w}×{h} → 다음 설정 시도");
         }
 
         Debug.LogError("[WebCam] 모든 해상도 시도 실패.\n" +
