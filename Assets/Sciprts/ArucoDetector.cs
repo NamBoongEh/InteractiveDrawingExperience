@@ -14,17 +14,11 @@ public class ArucoDetector : MonoBehaviour
     [Header("Settings")]
     public float holdDurationToCapture = 1.5f;
 
-    [Header("Output Size (per fish)")]
-    [Tooltip("fish별 고정 출력 크기. 인덱스=fishIndex.\n" +
-             "x=가로, y=세로. 0으로 두면 자동 계산(자연크기×2).\n" +
-             "플레이 중 'Auto-Calibrate' 컨텍스트 메뉴로 중간값 자동 측정 가능.")]
-    public Vector2Int[] fishOutputSizes = new Vector2Int[]
-    {
-        new Vector2Int(2200, 1330),   // fish0
-    };
+    // 출력 크기 고정 상수: 자연 크기 582×353 기준 ×4 배율 (비율 1.649:1 유지)
+    private const int kOutputW = 2328;
+    private const int kOutputH = 1412;
 
     [Header("Physical Dimensions (mm) — 비율 기반 마스크 크기")]
-
 #if UNITY_SENTIS
     [Header("AI Segmentation (Unity Sentis)")]
     public ModelAsset aiSegModel;
@@ -53,6 +47,15 @@ public class ArucoDetector : MonoBehaviour
     [Tooltip("외곽선(잉크) 픽셀 V 임계값. V < 이 값 = 검정 잉크로 판정.\n" +
              "alpha 경계를 이 값 이하의 어두운 픽셀까지 확장. 권장 80~100.")]
     public int inkInkThresh = 80;
+
+    [Header("Mask Offset (픽셀 단위 마스크 위치 보정)")]
+    [Tooltip("fish별 마스크 오프셋 (픽셀). x=좌(-)/우(+), y=위(-)/아래(+).\n" +
+             "세그멘테이션 결과에 오프셋을 적용해 위치를 미세 보정합니다.\n" +
+             "인덱스 = fishIndex. 배열보다 큰 인덱스는 오프셋 0,0 적용.")]
+    public Vector2Int[] maskOffsets = new Vector2Int[]
+    {
+        new Vector2Int(0, 0),   // fish0
+    };
 
     [Header("Template Placement")]
     [Range(0.3f, 2.0f)]
@@ -354,35 +357,21 @@ public class ArucoDetector : MonoBehaviour
     }
 
     // ── 워프 → 회전 → 마스크 ─────────────────────────────────
-    // 출력 크기를 고정값 없이 카메라 이미지 내 마커 꼭짓점 간 거리로 자연 계산
+    // 출력 크기: fishOutputSizes 고정값 우선 사용 (방안 A)
+    // 1920×1080 미만인 경우 1.5배 업스케일 적용
     (Texture2D tex, int tlMarkerId) Warp(Mat frame, Point2f[][] corners, int[] ids)
     {
         var (src, anchorPos, tlMarkerId) = GetWarpParams(corners, ids);
         int fishIndex = tlMarkerId / 4;
 
-        // ① 자연 크기: 카메라 픽셀 기준 종이 가로·세로 길이
-        var (warpW, warpH) = ComputeNaturalSize(src);
-        Debug.Log($"[Warp] 자연 크기: {warpW}×{warpH}  ratio={warpW/(float)warpH:F3}");
+        // ① 자연 크기: 582×353 고정 (카메라 거리·흔들림 무관하게 항상 동일 출력)
+        // ComputeNaturalSize 실측값은 로그로만 출력하고 실제 처리에는 사용하지 않음
+        var (measuredW, measuredH) = ComputeNaturalSize(src);
+        Debug.Log($"[Warp] 실측 자연 크기: {measuredW}×{measuredH}  ratio={measuredW/(float)measuredH:F3}  (고정값 582×353 사용)");
+        int warpW = 582, warpH = 353;
 
-        /*
-        // ② 출력 크기: fishOutputSizes[fishIndex] 우선, 없으면 자연크기×2
-        int outW, outH;
-        if (fishOutputSizes != null && fishIndex < fishOutputSizes.Length
-            && fishOutputSizes[fishIndex].x > 0 && fishOutputSizes[fishIndex].y > 0)
-        {
-            outW = fishOutputSizes[fishIndex].x;
-            outH = fishOutputSizes[fishIndex].y;
-        }
-        else
-        {
-            outW = warpW * 2;
-            outH = warpH * 2;
-        }
-        */
-
-        int outW, outH;
-            outW = warpW * 5;
-            outH = warpH * 5;
+        // ② 출력 크기: kOutputW × kOutputH 고정 (2328×1412)
+        int outW = kOutputW, outH = kOutputH;
         Debug.Log($"[Warp] 출력 크기: {outW}×{outH}  (fish{fishIndex})");
 
         Point2f[] dst = {
@@ -395,7 +384,7 @@ public class ArucoDetector : MonoBehaviour
         using Mat warped = new Mat();
         // BorderTypes.Constant + 흰색: 종이 바깥 영역이 검정이 아닌 흰색으로 채워짐
         Cv2.WarpPerspective(frame, warped, M, new OpenCvSharp.Size(outW, outH),
-                            InterpolationFlags.Cubic, BorderTypes.Constant,
+                            InterpolationFlags.Lanczos4, BorderTypes.Constant,
                             new Scalar(255, 255, 255, 255));
         Debug.Log($"[Warp] ① warped : {warped.Cols}×{warped.Rows}  (자연={warpW}×{warpH} → 고정={outW}×{outH})");
 
@@ -453,9 +442,6 @@ public class ArucoDetector : MonoBehaviour
                 {
                     // 원본(upscaled)을 흐리게 만든 blurred 생성
                     Cv2.GaussianBlur(upscaled, blurred, new OpenCvSharp.Size(0, 0), 1.5);
-
-                    // 공식 적용: upscaled = upscaled * 1.5 + blurred * -0.5
-                    // 이 과정을 거치면 upscaled 자체가 선명하게 변해.
                     Cv2.AddWeighted(upscaled, 1.5, blurred, -0.5, 0, upscaled);
                 }
 
@@ -492,7 +478,7 @@ public class ArucoDetector : MonoBehaviour
     }
 
     // ── 세그멘테이션 방법 선택 dispatch ───────────────────────
-    // 우선순위: AI(Sentis) > Contour+Template > 기본 V채널
+    // 우선순위: AI(Sentis) > Contour(항상 직접 사용)
     // 이후 useInkLineClip=true 이면 2차 잉크 라인 클리핑 적용
     void DispatchSegmentation(Mat rgba, int fishIndex)
     {
@@ -501,14 +487,46 @@ public class ArucoDetector : MonoBehaviour
             ApplyAISegmentation(rgba, fishIndex);
         else
 #endif
-        if ((_fishOnlyMasks != null && fishIndex < _fishOnlyMasks.Length && _fishOnlyMasks[fishIndex] != null))
-            ApplyContourSegmentation(rgba, fishIndex);
-        else
-            ApplyMask(rgba, fishIndex);
+        // 템플릿 존재 여부와 무관하게 항상 실제 그림 컨투어를 마스크로 사용
+        // → 캡처마다 그림 크기가 달라도 컨투어가 그림에 정확히 맞춤
+        ApplyContourSegmentation(rgba, fishIndex);
 
         // 2차 가공: 검정 외곽선 내부 정밀 클리핑
         if (useInkLineClip)
             ApplyInkLineClip(rgba, fishIndex);
+
+        // 3차 가공: 마스크 위치 오프셋 (픽셀 단위 상하좌우 이동)
+        if (maskOffsets != null && fishIndex < maskOffsets.Length)
+        {
+            var off = maskOffsets[fishIndex];
+            if (off.x != 0 || off.y != 0)
+                ShiftAlpha(rgba, off.x, off.y);
+        }
+    }
+
+    // ── 알파 채널을 dx, dy 픽셀만큼 이동 ───────────────────────
+    // dx > 0 = 오른쪽, dx < 0 = 왼쪽
+    // dy > 0 = 아래쪽, dy < 0 = 위쪽
+    static void ShiftAlpha(Mat rgba, int dx, int dy)
+    {
+        int W = rgba.Cols, H = rgba.Rows;
+
+        // 현재 알파 추출
+        using Mat src = new Mat();
+        Cv2.ExtractChannel(rgba, src, 3);
+
+        // 이동 행렬 적용 (WarpAffine)
+        using Mat shifted = Mat.Zeros(H, W, MatType.CV_8UC1);
+        var M = new float[,] { { 1, 0, dx }, { 0, 1, dy } };
+        using Mat transMat = new Mat(2, 3, MatType.CV_32F);
+        transMat.Set<float>(0, 0, 1);  transMat.Set<float>(0, 1, 0);  transMat.Set<float>(0, 2, dx);
+        transMat.Set<float>(1, 0, 0);  transMat.Set<float>(1, 1, 1);  transMat.Set<float>(1, 2, dy);
+        Cv2.WarpAffine(src, shifted, transMat, new OpenCvSharp.Size(W, H),
+                       InterpolationFlags.Nearest, BorderTypes.Constant, Scalar.Black);
+
+        // 이동된 알파를 rgba에 적용
+        Cv2.MixChannels(new[] { shifted }, new[] { rgba }, s_alphaMixMap);
+        Debug.Log($"[MaskOffset] alpha shifted dx={dx} dy={dy}");
     }
 
     // ApplyInkLineClip  (2차 가공 — 잉크 외곽선 alpha 확장 + 경화)
@@ -533,11 +551,15 @@ public class ArucoDetector : MonoBehaviour
         SaveDebugMat(curAlpha, "ic_02_alpha_before", fishIndex);
 
         // ③ alpha 경계를 외곽 잉크까지 확장 + 경화
+        // 선 굵기 절반(W/200 ≈ 7~15px)만큼 alpha 확장 → 검정 외곽선이 마스크 경계에 포함됨
+        // 이전 Size(1,1) = 커널 크기 1×1 → 사실상 팽창 없음(버그) → 수정
         using Mat dilAlpha   = new Mat();
         using Mat outerInk   = new Mat();
         using Mat inkPresent = new Mat();
-        using (var dilK = Cv2.GetStructuringElement(MorphShapes.Ellipse, new OpenCvSharp.Size(1, 1)))
-            Cv2.Dilate(curAlpha, dilAlpha, dilK);       // alpha 외곽 7px 확장
+        int dilRadius = Mathf.Max(3, W / 200) | 1;
+        using (var dilK = Cv2.GetStructuringElement(MorphShapes.Ellipse,
+                   new OpenCvSharp.Size(dilRadius, dilRadius)))
+            Cv2.Dilate(curAlpha, dilAlpha, dilK);       // alpha 외곽 선굵기 절반만큼 확장
         Cv2.BitwiseAnd(dilAlpha, darkMask, outerInk);   // 확장 영역 중 잉크(V<inkInkThresh)
         Cv2.BitwiseOr(curAlpha, outerInk, curAlpha);    // 외곽 잉크 → alpha=255 추가
         Cv2.BitwiseAnd(curAlpha, darkMask, inkPresent);
@@ -677,15 +699,16 @@ public class ArucoDetector : MonoBehaviour
 
             if (sumArea > 0 && ux2 > ux1)
             {
+                // 실제 union bounds 그대로 사용: 비대칭 구조(꼬리·지느러미)도 잘리지 않음
+                // 이전 centroid 대칭 방식은 무게중심이 bbox 중앙과 다를 때 한쪽을 잘라냄
+                inkBBox = new OpenCvSharp.Rect(
+                    ux1,
+                    uy1,
+                    Mathf.Min(sW - ux1, ux2 - ux1),
+                    Mathf.Min(sH - uy1, uy2 - uy1));
                 int cx = (int)(sumX / sumArea);
                 int cy = (int)(sumY / sumArea);
-                int hw = (ux2 - ux1) / 2;
-                int hh = (uy2 - uy1) / 2;
-                int nx = Mathf.Max(0, cx - hw);
-                int ny = Mathf.Max(0, cy - hh);
-                inkBBox = new OpenCvSharp.Rect(nx, ny,
-                    Mathf.Min(sW - nx, hw * 2), Mathf.Min(sH - ny, hh * 2));
-                Debug.Log($"[Contour] inkBBox(centroid+bboxClean) c=({cx},{cy}) hw={hw} hh={hh} → ({inkBBox.X},{inkBBox.Y}) {inkBBox.Width}×{inkBBox.Height}  fish{fishIndex}");
+                Debug.Log($"[Contour] inkBBox(union bounds) c=({cx},{cy}) → ({inkBBox.X},{inkBBox.Y}) {inkBBox.Width}×{inkBBox.Height}  fish{fishIndex}");
             }
             else
             {
@@ -698,15 +721,27 @@ public class ArucoDetector : MonoBehaviour
             }
         }
 
-        // ④ Large Close: sW/25 ≈ 44px × 4회 (원본 88px × 4와 동일 상대 효과)
+        // ── inkBBox 기반 동적 커널 크기 계산 ──────────────────────────────
+        // sW(전체 캔버스) 대신 inkBBox(실제 그림 범위)를 기준으로 커널 산출
+        // → 카메라 거리·그림 크기가 달라도 선 굵기 대비 커널 비율이 일정하게 유지됨
+        // 예) 그림이 작을 때(inkDim=600): 커널 작아짐 → 과도한 팽창 방지
+        //     그림이 클 때(inkDim=1800): 커널 커짐  → 넓은 간격도 연결 가능
+        // sW/2 를 하한으로 두어 inkBBox 미검출 시 기존 동작 유지
+        int inkDim = inkBBox.Width > 0 && inkBBox.Height > 0
+            ? Mathf.Max(inkBBox.Width, inkBBox.Height)
+            : sW / 2;
+        Debug.Log($"[Contour] inkDim={inkDim} (inkBBox:{inkBBox.Width}×{inkBBox.Height} sW:{sW})  fish{fishIndex}");
+
+        // ④ Large Close: inkDim 기반 동적 커널 × 2회
+        // 4회 → 2회: 반복 과다로 인한 볼록 방향 외곽 팽창 억제
         using Mat closedBlob = new Mat();
-        using (var ck = CreateEllipseKernel(sW, 25))
-            Cv2.MorphologyEx(drawMask, closedBlob, MorphTypes.Close, ck, iterations: 4);
+        using (var ck = CreateEllipseKernel(inkDim, 20))
+            Cv2.MorphologyEx(drawMask, closedBlob, MorphTypes.Close, ck, iterations: 2);
         SaveDebugMat(closedBlob, "ct_02_closed", fishIndex);
 
-        // ⑤ Open: 잡음 제거
+        // ⑤ Open: 잡음 제거 (inkDim 기반)
         using Mat cleanBlob = new Mat();
-        using (var ok = CreateEllipseKernel(sW, 300))
+        using (var ok = CreateEllipseKernel(inkDim, 150))
             Cv2.MorphologyEx(closedBlob, cleanBlob, MorphTypes.Open, ok, iterations: 1);
         SaveDebugMat(cleanBlob, "ct_03_clean", fishIndex);
 
@@ -715,8 +750,10 @@ public class ArucoDetector : MonoBehaviour
             RetrievalModes.External, ContourApproximationModes.ApproxSimple);
         if (contours.Length == 0)
         {
-            Debug.LogWarning("[Contour] 컨투어 없음 → FishMask 폴백");
-            ApplyFishTemplateMask(rgba, fishIndex);
+            // 컨투어 미검출: closedBlob(잉크 연결 결과)을 직접 마스크로 활용
+            // 템플릿 폴백 없이 실제 그림 픽셀 기반으로 처리 → 크기 변화에 자동 적응
+            Debug.LogWarning("[Contour] 컨투어 없음 → closedBlob 직접 마스크로 대체");
+            ApplyClosedBlobMask(rgba, closedBlob, inkBBox, W, H, fishIndex);
             return;
         }
         double minArea = (double)sW * sH * 0.005; // 0.5% 미만 잡음 제거
@@ -729,9 +766,21 @@ public class ArucoDetector : MonoBehaviour
         }
         if (validContours.Count == 0)
         {
-            Debug.LogWarning("[Contour] 최소 면적 컨투어 없음 → FishMask 폴백");
-            ApplyFishTemplateMask(rgba, fishIndex);
-            return;
+            // 면적 미달: 최소 면적 기준 완화 후 재시도 → 그래도 없으면 closedBlob 직접 사용
+            Debug.LogWarning("[Contour] 최소 면적 컨투어 없음 → 기준 완화 후 재시도");
+            double relaxedArea = (double)sW * sH * 0.001; // 0.1%로 완화
+            foreach (var c in contours)
+            {
+                double a = Cv2.ContourArea(c);
+                if (a >= relaxedArea) { validContours.Add(c); totalArea += a; }
+            }
+            if (validContours.Count == 0)
+            {
+                Debug.LogWarning("[Contour] 완화 후에도 컨투어 없음 → closedBlob 직접 마스크로 대체");
+                ApplyClosedBlobMask(rgba, closedBlob, inkBBox, W, H, fishIndex);
+                return;
+            }
+            Debug.Log($"[Contour] 완화 기준으로 컨투어 {validContours.Count}개 확보  fish{fishIndex}");
         }
         Debug.Log($"[Contour] 유효 컨투어 {validContours.Count}개  totalArea={totalArea:F0}px²  fish{fishIndex}");
 
@@ -744,10 +793,17 @@ public class ArucoDetector : MonoBehaviour
         ContourFillHoles(alphaMask, sW, sH);
         SaveDebugMat(alphaMask, "ct_05_holefilled", fishIndex);
 
-        // ⑨ 경계 스무딩 Close: 컨투어 틈새 연결 및 경계 매끄럽게 처리
-        using (var concaveK = CreateEllipseKernel(sW, 15))
-            Cv2.MorphologyEx(alphaMask, alphaMask, MorphTypes.Close, concaveK, iterations: 3);
+        // ⑨ 경계 스무딩 Close: 선 굵기 수준의 작은 커널 × 2회
+        // inkDim/8(반경≈187px) → inkDim/60(반경≈25px): 틈새만 연결, 외곽 팽창 최소화
+        using (var concaveK = CreateEllipseKernel(inkDim, 60))
+            Cv2.MorphologyEx(alphaMask, alphaMask, MorphTypes.Close, concaveK, iterations: 2);
         SaveDebugMat(alphaMask, "ct_06_concave", fishIndex);
+
+        // ⑩ 마스크 수축(Erode): Close 누적 팽창분을 실제 외곽선 위치로 복원
+        // 선 굵기 절반 수준의 침식 → 마스크가 그림 외곽선에 밀착
+        using (var erodeK = CreateEllipseKernel(inkDim, 120))
+            Cv2.Erode(alphaMask, alphaMask, erodeK, iterations: 1);
+        SaveDebugMat(alphaMask, "ct_07_eroded", fishIndex);
 
         // sW=W, sH=H이므로 alphaMask가 이미 W×H — 업스케일 불필요
         Cv2.Threshold(alphaMask, alphaMask, 127, 255, ThresholdTypes.Binary);
@@ -771,6 +827,36 @@ public class ArucoDetector : MonoBehaviour
 
         Cv2.MixChannels(new[] { alphaMask }, new[] { rgba }, s_alphaMixMap);
         Debug.Log($"[Contour] 완료: fish{fishIndex}  totalArea={totalArea:F0}px²  contours={validContours.Count}");
+        SaveDebugMat(rgba, "ct_10_final", fishIndex);
+    }
+
+    // ── 컨투어 검출 실패 시: closedBlob + FillHoles → 직접 마스크 적용 ──
+    // 템플릿 없이 실제 잉크 픽셀 기반으로 마스크 생성 → 크기 변화에 자동 적응
+    void ApplyClosedBlobMask(Mat rgba, Mat closedBlob,
+                             OpenCvSharp.Rect inkBBox, int W, int H, int fishIndex)
+    {
+        using Mat fallback = closedBlob.Clone();
+
+        // 내부 구멍 채우기 (FloodFill 역방향)
+        ContourFillHoles(fallback, W, H);
+        Cv2.Threshold(fallback, fallback, 127, 255, ThresholdTypes.Binary);
+
+        // inkBBox 클립: 잉크 범위 바깥 제거
+        if (inkBBox.Width > 0 && inkBBox.Height > 0)
+        {
+            int pad = Mathf.Max(5, W / 60);
+            int cx = Mathf.Max(0, inkBBox.X - pad);
+            int cy = Mathf.Max(0, inkBBox.Y - pad);
+            int cw = Mathf.Min(W - cx, inkBBox.Width  + pad * 2);
+            int ch = Mathf.Min(H - cy, inkBBox.Height + pad * 2);
+            using Mat clipMask = Mat.Zeros(H, W, MatType.CV_8UC1);
+            using (Mat roi = new Mat(clipMask, new OpenCvSharp.Rect(cx, cy, cw, ch)))
+                roi.SetTo(Scalar.White);
+            Cv2.BitwiseAnd(fallback, clipMask, fallback);
+        }
+
+        Cv2.MixChannels(new[] { fallback }, new[] { rgba }, s_alphaMixMap);
+        Debug.Log($"[Contour] closedBlob 직접 마스크 적용 완료  fish{fishIndex}");
         SaveDebugMat(rgba, "ct_10_final", fishIndex);
     }
 
@@ -801,7 +887,9 @@ public class ArucoDetector : MonoBehaviour
 
     // ── FishMaskApplier 템플릿 마스크를 알파 채널에 직접 적용 ────
     // 캐시된 _fishApplierMasks 사용. 반환값: 적용 성공 여부
-    bool ApplyFishTemplateMask(Mat rgba, int fishIndex)
+    // inkBBox: 실제 잉크 위치·크기 기준으로 템플릿을 배치 (Zero rect = 캔버스 전체 스트레칭)
+    bool ApplyFishTemplateMask(Mat rgba, int fishIndex,
+                               OpenCvSharp.Rect inkBBox = default)
     {
         if (_fishApplierMasks == null ||
             fishIndex >= _fishApplierMasks.Length ||
@@ -809,11 +897,47 @@ public class ArucoDetector : MonoBehaviour
             return false;
 
         int W = rgba.Cols, H = rgba.Rows;
-        using Mat scaledMask = new Mat();
-        Cv2.Resize(_fishApplierMasks[fishIndex], scaledMask, new OpenCvSharp.Size(W, H));
-        Cv2.Threshold(scaledMask, scaledMask, 128, 255, ThresholdTypes.Binary);
-        Cv2.MixChannels(new[] { scaledMask }, new[] { rgba }, s_alphaMixMap);
-        Debug.Log($"[FishTemplate] 마스크 적용: {W}×{H}  Fish{fishIndex}");
+        Mat tmpl = _fishApplierMasks[fishIndex];
+
+        // inkBBox가 유효하면: 잉크 영역 중심에 비율 유지 Fit-Inside 배치
+        // inkBBox가 없으면 (폴백): 전체 캔버스로 스트레칭 (기존 동작)
+        bool hasInk = inkBBox.Width > 0 && inkBBox.Height > 0;
+        if (hasInk)
+        {
+            // ① 잉크 영역 크기 기준 Fit-Inside 스케일
+            double scaleX = (double)inkBBox.Width  / tmpl.Cols;
+            double scaleY = (double)inkBBox.Height / tmpl.Rows;
+            double fitScale = System.Math.Min(scaleX, scaleY);
+            int rw = (int)(tmpl.Cols * fitScale);
+            int rh = (int)(tmpl.Rows * fitScale);
+
+            using Mat resized = new Mat();
+            Cv2.Resize(tmpl, resized, new OpenCvSharp.Size(rw, rh),
+                       0, 0, InterpolationFlags.Linear);
+            Cv2.Threshold(resized, resized, 128, 255, ThresholdTypes.Binary);
+
+            // ② 잉크 bbox 중심에 배치
+            int inkCx = inkBBox.X + inkBBox.Width  / 2;
+            int inkCy = inkBBox.Y + inkBBox.Height / 2;
+            int ox = Mathf.Clamp(inkCx - rw / 2, 0, W - rw);
+            int oy = Mathf.Clamp(inkCy - rh / 2, 0, H - rh);
+
+            using Mat alphaFull = new Mat(H, W, MatType.CV_8UC1, Scalar.Black);
+            using (Mat roi = new Mat(alphaFull, new OpenCvSharp.Rect(ox, oy, rw, rh)))
+                resized.CopyTo(roi);
+
+            Cv2.MixChannels(new[] { alphaFull }, new[] { rgba }, s_alphaMixMap);
+            Debug.Log($"[FishTemplate] inkBBox 기준 배치: inkC=({inkCx},{inkCy}) rw={rw} rh={rh} ox={ox} oy={oy}  Fish{fishIndex}");
+        }
+        else
+        {
+            // 잉크 위치 정보 없음 → 전체 캔버스 스트레칭 (기존 폴백)
+            using Mat scaledMask = new Mat();
+            Cv2.Resize(tmpl, scaledMask, new OpenCvSharp.Size(W, H));
+            Cv2.Threshold(scaledMask, scaledMask, 128, 255, ThresholdTypes.Binary);
+            Cv2.MixChannels(new[] { scaledMask }, new[] { rgba }, s_alphaMixMap);
+            Debug.Log($"[FishTemplate] 전체 스트레칭(inkBBox 없음): {W}×{H}  Fish{fishIndex}");
+        }
         return true;
     }
 

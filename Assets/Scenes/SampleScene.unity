@@ -537,15 +537,20 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   holdDurationToCapture: 1.5
-  fishOutputSizes: []
   aiSegModel: {fileID: 5022602860645237092, guid: 9157b418c6f71cf4881bd174fe0c5df7, type: 3}
   aiBackend: 256
-  aiThreshold: 0.4
-  aiCenterSigma: 0.3
-  aiMaskErodePx: 35
+  aiThreshold: 1.2
+  aiCenterSigma: 0.2
+  aiMaskErodePx: 5
   aiHoleFill: 1
   useInkLineClip: 1
-  inkInkThresh: 50
+  inkInkThresh: 70
+  maskOffsets:
+  - {x: 0, y: 0}
+  - {x: 0, y: 0}
+  - {x: 0, y: 0}
+  - {x: 0, y: 0}
+  - {x: 0, y: 0}
   tmMinScale: 0.8
   tmMaxScale: 1.15
   tmScaleSteps: 15
