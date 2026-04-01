@@ -8,12 +8,13 @@ public class WebCamCapture : MonoBehaviour
 {
     [Header("Camera Settings")]
     public int deviceIndex = 0;
-    [Tooltip("Razer Kiyo X 최대: 1920")]
+    [Tooltip("Razer Kiyo V2 X 최대: 1920 (1080p60)\n더 높은 해상도를 시도하려면 직접 입력.")]
     public int reqWidth  = 1920;
     public int reqHeight = 1080;
-    [Tooltip("항상 0 고정 (OS 자동 선택). FPS 수동 지정 시 DirectShow 협상 실패.")]
-    [HideInInspector]
-    public int reqFPS    = 0;
+    [Tooltip("목표 FPS. 0 = OS 자동 선택.\n" +
+             "Razer Kiyo V2 X: 1080p=60fps 지원.\n" +
+             "DirectShow 협상 실패 시 자동으로 FPS=0 으로 재시도.")]
+    public int reqFPS    = 60;
 
     [Header("Digital Zoom")]
     [Range(1f, 5f), Tooltip("디지털 줌 배율. 1=원본, 2=2배 확대. 마우스 스크롤로 조정 가능.")]
@@ -49,26 +50,29 @@ public class WebCamCapture : MonoBehaviour
     // ── Fallback 체인: 해상도 / FPS 조합을 순서대로 시도 ─────
     IEnumerator StartWithFallback(string camName)
     {
-        // fps는 항상 0(OS 자동) — 수동 FPS 지정 시 DirectShow "Could not start graph" 오류 발생
-        var candidates = new (int w, int h)[]
+        var candidates = new (int w, int h, int fps)[]
         {
-            (reqWidth, reqHeight),  // 사용자 요청
-            (1920, 1080),           // FHD
-            (1280,  720),           // HD
-            ( 640,  480),           // VGA
+            (2560, 1440, 60),       
+            (1920, 1080, 60),               // FHD 60fps
+            (1920, 1080,  0),               // FHD 자동
+            (1280,  720, 60),               // HD 60fps
+            (1280,  720,  0),               // HD 자동
+            ( 640,  480,  0),               // VGA 자동
         };
 
-        foreach (var (w, h) in candidates)
+        foreach (var (w, h, fps) in candidates)
         {
             // 이전 시도 정리
             if (CamTexture != null)
             {
                 CamTexture.Stop();
                 CamTexture = null;
-                yield return null; // 한 프레임 대기 후 재시도
+                yield return null;
             }
 
-            CamTexture = new WebCamTexture(camName, w, h);
+            CamTexture = fps > 0
+                ? new WebCamTexture(camName, w, h, fps)
+                : new WebCamTexture(camName, w, h);
             CamTexture.filterMode = FilterMode.Bilinear;
             CamTexture.Play();
 
@@ -85,11 +89,11 @@ public class WebCamCapture : MonoBehaviour
 
             if (CamTexture.width > 16)
             {
-                Debug.Log($"[WebCam] ✓ 실제: {CamTexture.width}×{CamTexture.height}  (요청={w}×{h})");
+                Debug.Log($"[WebCam] ✓ 실제: {CamTexture.width}×{CamTexture.height}@{CamTexture.requestedFPS}fps  (요청={w}×{h}@{fps})");
                 yield break;
             }
 
-            Debug.LogWarning($"[WebCam] 실패: {w}×{h} → 다음 설정 시도");
+            Debug.LogWarning($"[WebCam] 실패: {w}×{h}@{fps} → 다음 설정 시도");
         }
 
         Debug.LogError("[WebCam] 모든 해상도 시도 실패.\n" +
@@ -130,17 +134,23 @@ public class WebCamCapture : MonoBehaviour
         // 디지털 줌: 중앙 크롭 후 원본 크기로 확대
         if (zoomFactor > 1.001f)
         {
-            float invZoom  = 1f / zoomFactor;
-            int   cropW    = Mathf.Max(1, Mathf.RoundToInt(camW * invZoom));
-            int   cropH    = Mathf.Max(1, Mathf.RoundToInt(camH * invZoom));
-            int   x0       = (camW - cropW) / 2;
-            int   y0       = (camH - cropH) / 2;
-            var   roi      = new OpenCvSharp.Rect(x0, y0, cropW, cropH);
-            using Mat cropped = new Mat(mat, roi);
-            Mat zoomed = new Mat();
-            Cv2.Resize(cropped, zoomed, new Size(camW, camH), 0, 0, InterpolationFlags.Lanczos4);
-            mat.Dispose();
-            return zoomed;
+            try
+            {
+                float invZoom  = 1f / zoomFactor;
+                int   cropW    = Mathf.Max(1, Mathf.RoundToInt(camW * invZoom));
+                int   cropH    = Mathf.Max(1, Mathf.RoundToInt(camH * invZoom));
+                int   x0       = (camW - cropW) / 2;
+                int   y0       = (camH - cropH) / 2;
+                var   roi      = new OpenCvSharp.Rect(x0, y0, cropW, cropH);
+                using Mat cropped = new Mat(mat, roi);
+                Mat zoomed = new Mat();
+                Cv2.Resize(cropped, zoomed, new Size(camW, camH), 0, 0, InterpolationFlags.Lanczos4);
+                return zoomed;
+            }
+            finally
+            {
+                mat.Dispose();
+            }
         }
 
         return mat;

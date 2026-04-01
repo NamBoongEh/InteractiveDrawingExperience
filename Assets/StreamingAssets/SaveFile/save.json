@@ -1,12 +1,42 @@
 {
-  "wallIP": "192.168.1.9",
+  "wallIP": "192.168.0.136",
   "port": 11115,
   "ftpHost": "192.168.0.32",
   "ftpPort": 21,
   "ftpUser": "ftpuser",
   "ftpPassword": "1234",
   "resetTime": 120.0,
-  "saturation": 2,
-  "contrast": 1.1,
-  "brightness": 1.3
+
+  "maskOffsets": [
+    {
+      "front": { "x": 0, "y": 0 },
+      "left90": { "x": 0, "y": 0 },
+      "rotate180": { "x": 0, "y": 0 },
+      "right90": { "x": 0, "y": 0 }
+    },
+    {
+      "front": { "x": 0, "y": 0 },
+      "left90": { "x": 0, "y": 0 },
+      "rotate180": { "x": 0, "y": 0 },
+      "right90": { "x": 0, "y": 0 }
+    },
+    {
+      "front": { "x": 0, "y": 0 },
+      "left90": { "x": 0, "y": 0 },
+      "rotate180": { "x": 0, "y": 0 },
+      "right90": { "x": 0, "y": 0 }
+    },
+    {
+      "front": { "x": 0, "y": 0 },
+      "left90": { "x": 0, "y": 0 },
+      "rotate180": { "x": 0, "y": 0 },
+      "right90": { "x": 0, "y": 0 }
+    },
+    {
+      "front": { "x": 0, "y": 0 },
+      "left90": { "x": 0, "y": 0 },
+      "rotate180": { "x": 0, "y": 0 },
+      "right90": { "x": 0, "y": 0 }
+    }
+  ]
 }

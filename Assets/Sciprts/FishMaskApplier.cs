@@ -3,11 +3,6 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using OpenCvSharp;
 
-/// <summary>
-/// Resources/FishMaskApplier/fish{i}.png (마커 없이 물고기 실루엣만 포함) 를 로드하고,
-/// 매 스캔마다 내부 영역(마커 제외) 크기로 직접 리사이즈하여 alpha 마스크로 적용합니다.
-/// ArucoDetector와 같은 GameObject에 부착 후 Inspector에서 연결하세요.
-/// </summary>
 public class FishMaskApplier : MonoBehaviour
 {
     // ── 공개 프로퍼티 ──────────────────────────────────────────
@@ -46,9 +41,6 @@ public class FishMaskApplier : MonoBehaviour
     }
 
     // ── 마스크 적용 ───────────────────────────────────────────
-    /// <param name="rgba">워프된 RGBA Mat (전체 출력 크기 = outputWidth × outputHeight)</param>
-    /// <param name="fishIndex">tlMarkerId / 4</param>
-    /// <param name="innerCorners">워프 공간의 마커 내부 꼭짓점 [TL, TR, BR, BL]</param>
     public void Apply(Mat rgba, int fishIndex, Point2f[] innerCorners)
     {
         if (fishIndex < 0 || fishIndex >= _fishCount) return;

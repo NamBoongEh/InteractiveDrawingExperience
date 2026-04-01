@@ -1,7 +1,8 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.UI;
 using System;
 using System.IO;
+using System.Net;
 using System.Threading.Tasks;
 
 public enum ScannerState { Idle, Scanning, Processing, Sending, Done }
@@ -61,21 +62,28 @@ public class ScannerManager : MonoBehaviour
         string timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
         int fishNumber = tlMarkerId / 4;
         string fileName = $"{timestamp}_fish{fishNumber}.png";
-        string dirPath  = $"D:\\ftp\\fish{fishNumber}";
-        string fullPath = Path.Combine(dirPath, fileName);
+        string ftpUrl   = $"ftp://{ftpHost}:{ftpPort}/fish{fishNumber}/{fileName}";
 
-        // ── 폴더 없으면 1회 생성 ──────────────────────────────
-        if (!Directory.Exists(dirPath))
-        {
-            Directory.CreateDirectory(dirPath);
-            Debug.Log($"[저장] 폴더 생성: {dirPath}");
-        }
-
-        // ── 직접 저장 (FTP 없이) ─────────────────────────────
+        // ── PNG 인코딩 ────────────────────────────────────────
         byte[] pngBytes = warped.EncodeToPNG();
-        Destroy(warped); // PNG 인코딩 완료 후 즉시 해제 (누수 방지)
-        await Task.Run(() => File.WriteAllBytes(fullPath, pngBytes));
-        Debug.Log($"[저장] {fullPath}");
+        Destroy(warped); // 인코딩 완료 후 즉시 해제 (누수 방지)
+
+        // ── FTP 업로드 (백그라운드) ───────────────────────────
+        await Task.Run(() =>
+        {
+            var req = (FtpWebRequest)WebRequest.Create(ftpUrl);
+            req.Method        = WebRequestMethods.Ftp.UploadFile;
+            req.Credentials   = new NetworkCredential(ftpUser, ftpPassword);
+            req.UseBinary     = true;
+            req.UsePassive    = true;
+            req.ContentLength = pngBytes.Length;
+            using (var stream = req.GetRequestStream())
+            {
+                stream.Write(pngBytes, 0, pngBytes.Length);
+            } // ← stream.Close() → 서버에 EOF 시그널 전송
+            using var resp = (FtpWebResponse)req.GetResponse(); // 226 Transfer complete 수신
+            Debug.Log($"[FTP] 업로드 완료: {ftpUrl}  ({resp.StatusDescription.Trim()})");
+        });
 
         // ── UDP 전송 ─────────────────────────────────────────
         SetState(ScannerState.Sending);
@@ -101,18 +109,16 @@ public class ScannerManager : MonoBehaviour
         }
     }
 
-
-
     void SetState(ScannerState next)
     {
         State = next;
         statusText.text = next switch
         {
-            ScannerState.Idle => "종이를 웹캠 앞에 놓고 [스캔 시작]을 누르세요",
-            ScannerState.Scanning => "마커를 감지 중...",
+            ScannerState.Idle       => "종이를 웹캠 앞에 놓고 [스캔 시작]을 누르세요",
+            ScannerState.Scanning   => "마커를 감지 중...",
             ScannerState.Processing => "이미지 처리 중...",
-            ScannerState.Sending => "FTP 업로드 & 전송 중...",
-            ScannerState.Done => "완료!",
+            ScannerState.Sending    => "FTP 업로드 & 전송 중...",
+            ScannerState.Done       => "완료!",
             _ => ""
         };
     }

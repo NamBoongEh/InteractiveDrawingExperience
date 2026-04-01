@@ -539,21 +539,35 @@ MonoBehaviour:
   holdDurationToCapture: 1.5
   aiSegModel: {fileID: 5022602860645237092, guid: 9157b418c6f71cf4881bd174fe0c5df7, type: 3}
   aiBackend: 256
-  aiThreshold: 1.2
-  aiCenterSigma: 0.2
-  aiMaskErodePx: 5
+  aiThreshold: 0.9
+  aiCenterSigma: 0.9
+  aiMaskErodePx: 10
   aiHoleFill: 1
-  useInkLineClip: 1
-  inkInkThresh: 70
+  useInkLineClip: 0
+  inkInkThresh: 113
   maskOffsets:
-  - {x: 0, y: 0}
-  - {x: 0, y: 0}
-  - {x: 0, y: 0}
-  - {x: 0, y: 0}
-  - {x: 0, y: 0}
-  tmMinScale: 0.8
-  tmMaxScale: 1.15
-  tmScaleSteps: 15
+  - front: {x: 0, y: 0}
+    left90: {x: 0, y: 0}
+    rotate180: {x: 0, y: 0}
+    right90: {x: 0, y: 0}
+  - front: {x: 0, y: 0}
+    left90: {x: 0, y: 0}
+    rotate180: {x: 0, y: 0}
+    right90: {x: 0, y: 0}
+  - front: {x: 0, y: 0}
+    left90: {x: 0, y: 0}
+    rotate180: {x: 0, y: 0}
+    right90: {x: 0, y: 0}
+  - front: {x: 0, y: 0}
+    left90: {x: 0, y: 0}
+    rotate180: {x: 0, y: 0}
+    right90: {x: 0, y: 0}
+  - front: {x: 0, y: 0}
+    left90: {x: 0, y: 0}
+    rotate180: {x: 0, y: 0}
+    right90: {x: 0, y: 0}
+  upscaylExePath: upscayl-ncnn/upscayl-bin.exe
+  upscaylModelName: digital-art-4x
   saveDebugImages: 1
   overlayView: {fileID: 616127336}
   failureText: {fileID: 472110954}

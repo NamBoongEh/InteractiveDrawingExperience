@@ -17,6 +17,7 @@ public class ManagerScripts : MonoBehaviour
         public string ftpUser;
         public string ftpPassword;
         public float resetTime;
+        public MaskOffsetSet[] maskOffsets;
     }
 
     Dictionary<KeyCode, Action> keyDictionary;
@@ -235,5 +236,7 @@ public class ManagerScripts : MonoBehaviour
         scannerManager.ftpPassword = myData.ftpPassword;
 
         resetTime = myData.resetTime;
+
+        arucoDetector.maskOffsets = myData.maskOffsets;
     }
 }
