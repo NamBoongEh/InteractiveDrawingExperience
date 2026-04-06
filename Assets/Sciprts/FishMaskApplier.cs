@@ -21,7 +21,7 @@ public class FishMaskApplier : MonoBehaviour
             var tex = Resources.Load<Texture2D>($"FishMaskApplier/fish{i}");
             if (tex == null) break;
             list.Add(TextureToAlphaMat(tex));
-            Debug.Log($"[FishMaskApplier] fish{i} 로드 ({tex.width}×{tex.height}px)");
+            GameLog.Log($"[FishMaskApplier] fish{i} 로드 ({tex.width}×{tex.height}px)");
         }
 
         _fishCount = list.Count;
@@ -30,7 +30,7 @@ public class FishMaskApplier : MonoBehaviour
         if (_fishCount == 0)
             Debug.LogWarning("[FishMaskApplier] Resources/FishMaskApplier 에 fish*.png 파일이 없습니다.");
         else
-            Debug.Log($"[FishMaskApplier] 총 {_fishCount}개 로드 완료 → ID 범위 0~{_fishCount * 4 - 1}");
+            GameLog.Log($"[FishMaskApplier] 총 {_fishCount}개 로드 완료 → ID 범위 0~{_fishCount * 4 - 1}");
     }
 
     void OnDestroy()
@@ -73,7 +73,7 @@ public class FishMaskApplier : MonoBehaviour
         // ── alpha 채널 교체 ───────────────────────────────────
         Cv2.MixChannels(new[] { fullMask }, new[] { rgba }, new[] { 0, 3 });
 
-        Debug.Log($"[FishMaskApplier] fish{fishIndex} 마스크 적용 완료 | " +
+        GameLog.Log($"[FishMaskApplier] fish{fishIndex} 마스크 적용 완료 | " +
                   $"내부영역=({left},{top})~({right},{bottom}) {innerW}×{innerH}px | " +
                   $"fishPNG={alphaSrc.Cols}×{alphaSrc.Rows} → 리사이즈={innerW}×{innerH}");
     }

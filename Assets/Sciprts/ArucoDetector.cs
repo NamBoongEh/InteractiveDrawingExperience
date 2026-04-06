@@ -167,7 +167,7 @@ public class ArucoDetector : MonoBehaviour
                 try
                 {
                     _sentisWorker = new Worker(ModelLoader.Load(aiSegModel), aiBackend);
-                    Debug.Log($"[AISeg] U2Net Worker 초기화 완료 (backend={aiBackend}  inputSize={aiInputSize})");
+                    GameLog.Log($"[AISeg] U2Net Worker 초기화 완료 (backend={aiBackend}  inputSize={aiInputSize})");
                 }
                 catch (Exception e) { Debug.LogError($"[AISeg] Worker 초기화 실패: {e.Message}"); }
             }
@@ -284,7 +284,7 @@ public class ArucoDetector : MonoBehaviour
         if (result == null || result.Empty())
             throw new Exception("upscayl-bin 출력 이미지 로드 실패");
 
-        UnityEngine.Debug.Log($"[UpscaylAsync] {input.Cols}×{input.Rows} → {result.Cols}×{result.Rows}");
+        GameLog.Log($"[UpscaylAsync] {input.Cols}×{input.Rows} → {result.Cols}×{result.Rows}");
         return result;
     }
 
@@ -459,38 +459,51 @@ public class ArucoDetector : MonoBehaviour
                             new Scalar(255, 255, 255, 255));
 
         SaveDebugMat(rawWarp, "00_rawWarp", fishIndex);
-        Debug.Log($"[Warp] ① rawWarp: {rawWarp.Cols}×{rawWarp.Rows}  (fish{fishIndex})");
+        GameLog.Log($"[Warp] ① rawWarp: {rawWarp.Cols}×{rawWarp.Rows}  (fish{fishIndex})");
 
         // ② upscayl-bin 4× AI 업스케일 (백그라운드 스레드, 메인 스레드 비차단)
-        Mat upscaled;
+        // rawWarp는 성공/실패 무관하게 finally에서 즉시 해제.
+        // upscaled는 null 초기화 후 null 반환 방어 + 이후 예외 시 finally에서 보장 해제.
+        Mat upscaled = null;
         try   { upscaled = await UpscaylAsync(rawWarp); }
         finally { rawWarp.Dispose(); }
-        Debug.Log($"[Warp] ② upscaled: {upscaled.Cols}×{upscaled.Rows}");
-        SaveDebugMat(upscaled, "00_warp_raw", fishIndex);
 
-        if (anchorPos == 0)
+        if (upscaled == null)
         {
-            DispatchSegmentation(upscaled, fishIndex, anchorPos: 0);
-            SaveDebugMat(upscaled, "07_after_mask", fishIndex);
-            Debug.Log($"[Warp] 최종 출력: {upscaled.Cols}×{upscaled.Rows} ({s_rotLabels[0]})");
-            var result0 = (FinalizeOutput(upscaled, fishIndex), tlMarkerId);
-            upscaled.Dispose();
-            return result0;
+            Debug.LogError("[Warp] UpscaylAsync가 null을 반환 — 처리 중단");
+            return (null, -1);
         }
 
-        RotateFlags flag = anchorPos == 1 ? RotateFlags.Rotate90CounterClockwise
-                         : anchorPos == 2 ? RotateFlags.Rotate180
-                         :                  RotateFlags.Rotate90Clockwise;
-        Mat rotated = new Mat();
-        Cv2.Rotate(upscaled, rotated, flag);
-        upscaled.Dispose();
+        try
+        {
+            GameLog.Log($"[Warp] ② upscaled: {upscaled.Cols}×{upscaled.Rows}");
+            SaveDebugMat(upscaled, "00_warp_raw", fishIndex);
 
-        DispatchSegmentation(rotated, fishIndex, anchorPos);
-        SaveDebugMat(rotated, "07_after_mask", fishIndex);
-        Debug.Log($"[Warp] 최종 출력: {rotated.Cols}×{rotated.Rows} ({s_rotLabels[anchorPos]})");
-        var result = (FinalizeOutput(rotated, fishIndex), tlMarkerId);
-        rotated.Dispose();
-        return result;
+            if (anchorPos == 0)
+            {
+                DispatchSegmentation(upscaled, fishIndex, anchorPos: 0);
+                SaveDebugMat(upscaled, "07_after_mask", fishIndex);
+                GameLog.Log($"[Warp] 최종 출력: {upscaled.Cols}×{upscaled.Rows} ({s_rotLabels[0]})");
+                return (FinalizeOutput(upscaled, fishIndex), tlMarkerId);
+            }
+
+            RotateFlags flag = anchorPos == 1 ? RotateFlags.Rotate90CounterClockwise
+                             : anchorPos == 2 ? RotateFlags.Rotate180
+                             :                  RotateFlags.Rotate90Clockwise;
+            using Mat rotated = new Mat();
+            Cv2.Rotate(upscaled, rotated, flag);
+            upscaled.Dispose();
+            upscaled = null; // finally 중복 해제 방지
+
+            DispatchSegmentation(rotated, fishIndex, anchorPos);
+            SaveDebugMat(rotated, "07_after_mask", fishIndex);
+            GameLog.Log($"[Warp] 최종 출력: {rotated.Cols}×{rotated.Rows} ({s_rotLabels[anchorPos]})");
+            return (FinalizeOutput(rotated, fishIndex), tlMarkerId);
+        }
+        finally
+        {
+            upscaled?.Dispose(); // 예외 발생 시 upscaled 미해제 방지
+        }
     }
 
     // ── Texture2D 변환 ─────────────────────────────────────────
@@ -513,7 +526,7 @@ public class ArucoDetector : MonoBehaviour
         // alpha 통계: 모두 0이면 MixChannels 실패, 모두 255면 full-opaque
         double minVal, maxVal;
         Cv2.MinMaxLoc(a, out minVal, out maxVal);
-        Debug.Log($"[FinalizeOutput] alpha min={minVal} max={maxVal}  ch={mat.Channels()}  fish{fishIndex}");
+        GameLog.Log($"[FinalizeOutput] alpha min={minVal} max={maxVal}  ch={mat.Channels()}  fish{fishIndex}");
 
         using Mat nz = new Mat();
         Cv2.FindNonZero(a, nz);
@@ -525,7 +538,7 @@ public class ArucoDetector : MonoBehaviour
         if (!alphaBad)
         {
             cropRect = Cv2.BoundingRect(nz);
-            Debug.Log($"[FinalizeOutput] alpha bbox=({cropRect.X},{cropRect.Y}) {cropRect.Width}×{cropRect.Height}  fish{fishIndex}");
+            GameLog.Log($"[FinalizeOutput] alpha bbox=({cropRect.X},{cropRect.Y}) {cropRect.Width}×{cropRect.Height}  fish{fishIndex}");
         }
         else
         {
@@ -561,7 +574,7 @@ public class ArucoDetector : MonoBehaviour
             Cv2.MixChannels(new[] { croppedAlpha }, new[] { processed }, s_alphaMixMap);
 
             SaveDebugMat(processed, "09_cropped", fishIndex);
-            Debug.Log($"[FinalizeOutput] {mat.Cols}×{mat.Rows} → {w}×{h}  crop=({x},{y})  fish{fishIndex}");
+            GameLog.Log($"[FinalizeOutput] {mat.Cols}×{mat.Rows} → {w}×{h}  crop=({x},{y})  fish{fishIndex}");
             return MatToTexture2D(processed);
         }
 
@@ -575,7 +588,7 @@ public class ArucoDetector : MonoBehaviour
     {
         string dirLabel = anchorPos >= 0 && anchorPos < s_rotLabels.Length
             ? s_rotLabels[anchorPos] : anchorPos.ToString();
-        Debug.Log($"[Segmentation] fish{fishIndex} — 방향: {dirLabel} (anchorPos={anchorPos})");
+        GameLog.Log($"[Segmentation] fish{fishIndex} — 방향: {dirLabel} (anchorPos={anchorPos})");
 
 #if UNITY_SENTIS
         if (_sentisWorker != null)
@@ -599,11 +612,11 @@ public class ArucoDetector : MonoBehaviour
         else
         {
             var off = maskOffsets[fishIndex].GetOffset(anchorPos);
-            Debug.Log($"[MaskOffset] fish{fishIndex} anchorPos={anchorPos}({s_rotLabels[anchorPos]}) → offset=({off.x},{off.y})");
+            GameLog.Log($"[MaskOffset] fish{fishIndex} anchorPos={anchorPos}({s_rotLabels[anchorPos]}) → offset=({off.x},{off.y})");
             if (off.x != 0 || off.y != 0)
                 ShiftAlpha(rgba, off.x, off.y);
             else
-                Debug.Log($"[MaskOffset] offset이 (0,0)이므로 ShiftAlpha 스킵. 올바른 방향에 값을 입력했는지 확인하세요.");
+                GameLog.Log($"[MaskOffset] offset이 (0,0)이므로 ShiftAlpha 스킵. 올바른 방향에 값을 입력했는지 확인하세요.");
         }
     }
 
@@ -628,7 +641,7 @@ public class ArucoDetector : MonoBehaviour
 
         // 이동된 알파를 rgba에 적용
         Cv2.MixChannels(new[] { shifted }, new[] { rgba }, s_alphaMixMap);
-        Debug.Log($"[MaskOffset] alpha shifted dx={dx} dy={dy}");
+        GameLog.Log($"[MaskOffset] alpha shifted dx={dx} dy={dy}");
     }
 
     // ApplyInkLineClip  (2차 가공 — 잉크 외곽선 alpha 확장 + 경화)
@@ -672,7 +685,7 @@ public class ArucoDetector : MonoBehaviour
         int finalArea = Cv2.CountNonZero(curAlpha);
         Cv2.MixChannels(new[] { curAlpha }, new[] { rgba }, s_alphaMixMap);
 
-        Debug.Log($"[InkClip] 완료  alpha {alphaArea}→{finalArea}px  fish{fishIndex}");
+        GameLog.Log($"[InkClip] 완료  alpha {alphaArea}→{finalArea}px  fish{fishIndex}");
         SaveDebugMat(rgba, "ic_04_clipped", fishIndex);
     }
 
@@ -685,7 +698,7 @@ public class ArucoDetector : MonoBehaviour
 
         // 100% 처리: 다운스케일 없이 원본 해상도에서 직접 처리
         int sW = W, sH = H;
-        Debug.Log($"[Contour] 입력:{W}×{H} 처리:100%  fish{fishIndex}");
+        GameLog.Log($"[Contour] 입력:{W}×{H} 처리:100%  fish{fishIndex}");
 
         // ① 그레이스케일 (원본 해상도)
         using Mat sbgr = new Mat();
@@ -705,11 +718,11 @@ public class ArucoDetector : MonoBehaviour
         {
             // Otsu 임계값이 너무 높음 → 200으로 캡: 밝은 내부 픽셀도 포함
             Cv2.Threshold(blurred, drawMask, 200, 255, ThresholdTypes.BinaryInv);
-            Debug.Log($"[Contour] Otsu={otsuThresh:F0} > 200 → 캡 적용: 임계=200  fish{fishIndex}");
+            GameLog.Log($"[Contour] Otsu={otsuThresh:F0} > 200 → 캡 적용: 임계=200  fish{fishIndex}");
         }
         else
         {
-            Debug.Log($"[Contour] Otsu 임계값={otsuThresh:F0}  fish{fishIndex}");
+            GameLog.Log($"[Contour] Otsu 임계값={otsuThresh:F0}  fish{fishIndex}");
         }
         SaveDebugMat(drawMask, "ct_01_darkmask", fishIndex);
 
@@ -785,7 +798,7 @@ public class ArucoDetector : MonoBehaviour
                     Mathf.Min(sH - uy1, uy2 - uy1));
                 int cx = (int)(sumX / sumArea);
                 int cy = (int)(sumY / sumArea);
-                Debug.Log($"[Contour] inkBBox(union bounds) c=({cx},{cy}) → ({inkBBox.X},{inkBBox.Y}) {inkBBox.Width}×{inkBBox.Height}  fish{fishIndex}");
+                GameLog.Log($"[Contour] inkBBox(union bounds) c=({cx},{cy}) → ({inkBBox.X},{inkBBox.Y}) {inkBBox.Width}×{inkBBox.Height}  fish{fishIndex}");
             }
             else
             {
@@ -794,7 +807,7 @@ public class ArucoDetector : MonoBehaviour
                 Cv2.FindNonZero(drawMask, inkPts);
                 if (inkPts != null && !inkPts.Empty())
                     inkBBox = Cv2.BoundingRect(inkPts);
-                Debug.Log($"[Contour] inkBBox(raw fallback) → ({inkBBox.X},{inkBBox.Y}) {inkBBox.Width}×{inkBBox.Height}  fish{fishIndex}");
+                GameLog.Log($"[Contour] inkBBox(raw fallback) → ({inkBBox.X},{inkBBox.Y}) {inkBBox.Width}×{inkBBox.Height}  fish{fishIndex}");
             }
         }
 
@@ -807,7 +820,7 @@ public class ArucoDetector : MonoBehaviour
         int inkDim = inkBBox.Width > 0 && inkBBox.Height > 0
             ? Mathf.Max(inkBBox.Width, inkBBox.Height)
             : sW / 2;
-        Debug.Log($"[Contour] inkDim={inkDim} (inkBBox:{inkBBox.Width}×{inkBBox.Height} sW:{sW})  fish{fishIndex}");
+        GameLog.Log($"[Contour] inkDim={inkDim} (inkBBox:{inkBBox.Width}×{inkBBox.Height} sW:{sW})  fish{fishIndex}");
 
         // ④-pre: Large Close 전 inkBBox 클립
         // drawMask에 inkBBox 바깥의 dark 픽셀(조명 불균일·그림자·종이 경계 외 영역)이 포함되면
@@ -875,9 +888,9 @@ public class ArucoDetector : MonoBehaviour
                 ApplyClosedBlobMask(rgba, closedBlob, inkBBox, W, H, fishIndex);
                 return;
             }
-            Debug.Log($"[Contour] 완화 기준으로 컨투어 {validContours.Count}개 확보  fish{fishIndex}");
+            GameLog.Log($"[Contour] 완화 기준으로 컨투어 {validContours.Count}개 확보  fish{fishIndex}");
         }
-        Debug.Log($"[Contour] 유효 컨투어 {validContours.Count}개  totalArea={totalArea:F0}px²  fish{fishIndex}");
+        GameLog.Log($"[Contour] 유효 컨투어 {validContours.Count}개  totalArea={totalArea:F0}px²  fish{fishIndex}");
 
         // ⑦ 최대 컨투어 선택 → DrawContours 완전 채우기 (내부 구멍 원천 제거)
         Point[] biggestContour = validContours[0];
@@ -887,7 +900,7 @@ public class ArucoDetector : MonoBehaviour
             double a = Cv2.ContourArea(validContours[ci]);
             if (a > biggestArea) { biggestArea = a; biggestContour = validContours[ci]; }
         }
-        Debug.Log($"[Contour] 최대 컨투어 면적={biggestArea:F0}px²  fish{fishIndex}");
+        GameLog.Log($"[Contour] 최대 컨투어 면적={biggestArea:F0}px²  fish{fishIndex}");
         using Mat alphaMask = Mat.Zeros(sH, sW, MatType.CV_8UC1);
         Cv2.DrawContours(alphaMask, new[] { biggestContour }, 0, Scalar.White, thickness: -1);
 
@@ -936,11 +949,11 @@ public class ArucoDetector : MonoBehaviour
                 roi.SetTo(Scalar.White);
 
             Cv2.BitwiseAnd(alphaMask, clipMask, alphaMask);
-            Debug.Log($"[Contour] inkClip=({clipX},{clipY}) {clipW}×{clipH}  pad={inkPad}  fish{fishIndex}");
+            GameLog.Log($"[Contour] inkClip=({clipX},{clipY}) {clipW}×{clipH}  pad={inkPad}  fish{fishIndex}");
         }
 
         Cv2.MixChannels(new[] { alphaMask }, new[] { rgba }, s_alphaMixMap);
-        Debug.Log($"[Contour] 완료: fish{fishIndex}  totalArea={totalArea:F0}px²  contours={validContours.Count}");
+        GameLog.Log($"[Contour] 완료: fish{fishIndex}  totalArea={totalArea:F0}px²  contours={validContours.Count}");
         SaveDebugMat(rgba, "ct_10_final", fishIndex);
     }
 
@@ -979,7 +992,7 @@ public class ArucoDetector : MonoBehaviour
         }
 
         Cv2.MixChannels(new[] { fallback }, new[] { rgba }, s_alphaMixMap);
-        Debug.Log($"[Contour] closedBlob 직접 마스크 적용 완료  fish{fishIndex}");
+        GameLog.Log($"[Contour] closedBlob 직접 마스크 적용 완료  fish{fishIndex}");
         SaveDebugMat(rgba, "ct_10_final", fishIndex);
     }
 
@@ -1022,7 +1035,7 @@ public class ArucoDetector : MonoBehaviour
     {
         int W = rgba.Cols, H = rgba.Rows;
         int sz = aiInputSize;
-        Debug.Log($"[AISeg] ① 입력: {W}×{H}  modelInput={sz}×{sz}  fish{fishIndex}");
+        GameLog.Log($"[AISeg] ① 입력: {W}×{H}  modelInput={sz}×{sz}  fish{fishIndex}");
 
         float[] inputData = AISeg_Preprocess(rgba, sz);
 
@@ -1037,7 +1050,7 @@ public class ArucoDetector : MonoBehaviour
         }
         // Sentis 2.x: GPU 텐서 → CPU 복사본으로 변환해야 인덱서 접근 가능
         using var salTensor = rawTensor.ReadbackAndClone();
-        Debug.Log($"[AISeg] ② 추론 완료  shape={salTensor.shape}");
+        GameLog.Log($"[AISeg] ② 추론 완료  shape={salTensor.shape}");
 
         using Mat salMat  = AISeg_SaliencyToMat(salTensor, sz, sz);
         SaveDebugMat(salMat, "02_saliency_raw", fishIndex);
@@ -1050,7 +1063,7 @@ public class ArucoDetector : MonoBehaviour
         // ③ 이진화: threshold가 너무 높아 픽셀이 거의 없으면 자동으로 낮춤 (Otsu 폴백)
         Cv2.Threshold(resized, alphaMask, (int)(aiThreshold * 255), 255, ThresholdTypes.Binary);
         int pxAfterThresh = Cv2.CountNonZero(alphaMask);
-        Debug.Log($"[AISeg] ③ 이진화(threshold={aiThreshold:F2}): " +
+        GameLog.Log($"[AISeg] ③ 이진화(threshold={aiThreshold:F2}): " +
                   $"마스크={pxAfterThresh}px / {W * H}px");
         // 픽셀이 전체의 1% 미만이면 threshold가 너무 높은 것 → Otsu 자동 임계값으로 재시도
         if (pxAfterThresh < W * H * 0.01)
@@ -1077,7 +1090,7 @@ public class ArucoDetector : MonoBehaviour
             if (pxAfterErode > 0)
             {
                 eroded.CopyTo(alphaMask);
-                Debug.Log($"[AISeg] ④ 침식({safeErodePx}px, 원본요청={aiMaskErodePx}px) 후: {pxAfterErode}px");
+                GameLog.Log($"[AISeg] ④ 침식({safeErodePx}px, 원본요청={aiMaskErodePx}px) 후: {pxAfterErode}px");
             }
             else
             {
@@ -1091,7 +1104,7 @@ public class ArucoDetector : MonoBehaviour
         if (aiHoleFill && Cv2.CountNonZero(alphaMask) > 0)
         {
             AISeg_FillHoles(alphaMask);
-            Debug.Log($"[AISeg] ⑤ 구멍채우기 후: {Cv2.CountNonZero(alphaMask)}px");
+            GameLog.Log($"[AISeg] ⑤ 구멍채우기 후: {Cv2.CountNonZero(alphaMask)}px");
             SaveDebugMat(alphaMask, "05_after_holefill", fishIndex);
         }
         else if (aiHoleFill)
@@ -1104,16 +1117,19 @@ public class ArucoDetector : MonoBehaviour
                        ? _fishApplierMasks[fishIndex] : null;
         if (cachedMask != null)
         {
-            Debug.Log($"[AISeg] ⑥ FishMask 리사이즈: 파일={cachedMask.Cols}×{cachedMask.Rows} → 캡처={W}×{H}px");
+            GameLog.Log($"[AISeg] ⑥ FishMask 리사이즈: 파일={cachedMask.Cols}×{cachedMask.Rows} → 캡처={W}×{H}px");
 
             using Mat resizedMask = new Mat();
             Cv2.Resize(cachedMask, resizedMask, new OpenCvSharp.Size(W, H),
                        0, 0, InterpolationFlags.Lanczos4);
+            // Lanczos4는 이진 마스크 테두리에 중간 그레이값(링잉 아티팩트)을 만든다.
+            // 재이진화로 0/255 순수 바이너리를 유지해야 AND 이후 테두리가 깔끔해진다.
+            Cv2.Threshold(resizedMask, resizedMask, 128, 255, ThresholdTypes.Binary);
 
             // 리사이즈된 마스크를 W×H 캔버스 중앙에 배치 후 AND
             using Mat centered = CenterPlaceMask(resizedMask, W, H);
             Cv2.BitwiseAnd(alphaMask, centered, alphaMask);
-            Debug.Log($"[AISeg] ⑥ FishMaskApplier AND 후: {Cv2.CountNonZero(alphaMask)}px");
+            GameLog.Log($"[AISeg] ⑥ FishMaskApplier AND 후: {Cv2.CountNonZero(alphaMask)}px");
             SaveDebugMat(alphaMask, "06_after_and", fishIndex);
 
             // ⑥-a AND 이후 구멍 채우기 (BitwiseNot 없는 정확한 구현)
@@ -1124,7 +1140,7 @@ public class ArucoDetector : MonoBehaviour
             if (Cv2.CountNonZero(alphaMask) > 0)
             {
                 FillHolesAfterAnd(alphaMask);
-                Debug.Log($"[AISeg] ⑥-a AND 후 구멍채우기: {Cv2.CountNonZero(alphaMask)}px");
+                GameLog.Log($"[AISeg] ⑥-a AND 후 구멍채우기: {Cv2.CountNonZero(alphaMask)}px");
                 SaveDebugMat(alphaMask, "06a_after_and_holefill", fishIndex);
             }
 
@@ -1141,7 +1157,7 @@ public class ArucoDetector : MonoBehaviour
                 if (pxAfterPostErode > 0)
                 {
                     postEroded.CopyTo(alphaMask);
-                    Debug.Log($"[AISeg] ⑥-b AND 후 침식({safeErodePx}px) 후: {pxAfterPostErode}px");
+                    GameLog.Log($"[AISeg] ⑥-b AND 후 침식({safeErodePx}px) 후: {pxAfterPostErode}px");
                 }
                 else
                 {
@@ -1191,7 +1207,7 @@ public class ArucoDetector : MonoBehaviour
                 int ibY = Mathf.Max(0, rawInkBBox.Y - ibPad);
                 int ibW = Mathf.Min(W - ibX, rawInkBBox.Width  + ibPad * 2);
                 int ibH = Mathf.Min(H - ibY, rawInkBBox.Height + ibPad * 2);
-                Debug.Log($"[AISeg] ⑦-pre inkBBox: raw=({rawInkBBox.X},{rawInkBBox.Y}) " +
+                GameLog.Log($"[AISeg] ⑦-pre inkBBox: raw=({rawInkBBox.X},{rawInkBBox.Y}) " +
                           $"{rawInkBBox.Width}×{rawInkBBox.Height}  pad={ibPad}  " +
                           $"clip=({ibX},{ibY}) {ibW}×{ibH}  fish{fishIndex}");
 
@@ -1212,7 +1228,7 @@ public class ArucoDetector : MonoBehaviour
         Cv2.GaussianBlur(alphaMask, alphaMask, new OpenCvSharp.Size(5, 5), 1.5);
 
         Cv2.MixChannels(new[] { alphaMask }, new[] { rgba }, s_alphaMixMap);
-        Debug.Log($"[AISeg] ⑨ 완료: {W}×{H}  Fish{fishIndex}");
+        GameLog.Log($"[AISeg] ⑨ 완료: {W}×{H}  Fish{fishIndex}");
     }
 
     // ── 내부 구멍 채우기 ─────────────────────────────────────
@@ -1347,7 +1363,7 @@ public class ArucoDetector : MonoBehaviour
 
         Mat mat = new Mat(H, W, MatType.CV_8UC1);
         Marshal.Copy(pixels, 0, mat.Data, pixels.Length);
-        Debug.Log($"[AISeg] 살리언시 범위: {salMin:F3}~{salMax:F3}  가우시안={useGauss}(σ={aiCenterSigma:F2})");
+        GameLog.Log($"[AISeg] 살리언시 범위: {salMin:F3}~{salMax:F3}  가우시안={useGauss}(σ={aiCenterSigma:F2})");
         return mat;
     }
 #endif
@@ -1412,7 +1428,7 @@ public class ArucoDetector : MonoBehaviour
         using Mat canvasRegion = new Mat(canvas, canvasRoi);
         srcRegion.CopyTo(canvasRegion);
 
-        Debug.Log($"[CenterMask] src={srcW}×{srcH} → canvas={canvasW}×{canvasH}  " +
+        GameLog.Log($"[CenterMask] src={srcW}×{srcH} → canvas={canvasW}×{canvasH}  " +
                   $"paste@({dstX},{dstY}) size={copyW}×{copyH}");
         return canvas;
     }
@@ -1518,7 +1534,7 @@ public class ArucoDetector : MonoBehaviour
         System.IO.File.WriteAllBytes(path, tex.EncodeToPNG());
         DestroyImmediate(tex);
 
-        Debug.Log($"[DebugSave] {stepName} → {path}");
+        GameLog.Log($"[DebugSave] {stepName} → {path}");
     }
 }
 

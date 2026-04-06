@@ -38,6 +38,12 @@ public class ScannerManager : MonoBehaviour
         SetState(ScannerState.Idle);
     }
 
+    void OnDestroy()
+    {
+        if (arucoDetector != null)
+            arucoDetector.OnAllMarkersDetected -= HandleMarkersDetected;
+    }
+
     void Update()
     {
         // Enter 키(Return 또는 NumpadEnter)로 스캔 버튼과 동일하게 동작
@@ -82,7 +88,7 @@ public class ScannerManager : MonoBehaviour
                 stream.Write(pngBytes, 0, pngBytes.Length);
             } // ← stream.Close() → 서버에 EOF 시그널 전송
             using var resp = (FtpWebResponse)req.GetResponse(); // 226 Transfer complete 수신
-            Debug.Log($"[FTP] 업로드 완료: {ftpUrl}  ({resp.StatusDescription.Trim()})");
+            GameLog.Log($"[FTP] 업로드 완료: {ftpUrl}  ({resp.StatusDescription.Trim()})");
         });
 
         // ── UDP 전송 ─────────────────────────────────────────
@@ -98,7 +104,7 @@ public class ScannerManager : MonoBehaviour
         }
         bool sent = await udpTextSender.SendAsync(message);
 
-        Debug.Log($"[UDP] 전송: {message}");
+        GameLog.Log($"[UDP] 전송: {message}");
         SetState(sent ? ScannerState.Done : ScannerState.Idle);
 
         if (sent)

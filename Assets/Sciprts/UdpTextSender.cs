@@ -37,7 +37,7 @@ public class UdpTextSender : MonoBehaviour
             _cts       = new CancellationTokenSource();
             _recvThread = new Thread(ReceiveLoop) { IsBackground = true };
             _recvThread.Start();
-            Debug.Log($"[UDP] 포트 {port}  송수신 시작  →  {wallIP}:{port}");
+            GameLog.Log($"[UDP] 포트 {port}  송수신 시작  →  {wallIP}:{port}");
         }
         catch (Exception e)
         {
@@ -55,7 +55,7 @@ public class UdpTextSender : MonoBehaviour
             {
                 byte[] data = _udpClient.Receive(ref remote);
                 string msg  = Encoding.UTF8.GetString(data);
-                Debug.Log($"[UDP] 수신: {msg}");
+                GameLog.Log($"[UDP] 수신: {msg}");
                 onMessageReceived?.Invoke(msg);
             }
             catch (SocketException)
@@ -77,7 +77,7 @@ public class UdpTextSender : MonoBehaviour
         {
             byte[] data = Encoding.UTF8.GetBytes(message);
             await _udpClient.SendAsync(data, data.Length, _wallEndPoint);
-            Debug.Log($"[UDP] 송신 완료: {message}");
+            GameLog.Log($"[UDP] 송신 완료: {message}");
             return true;
         }
         catch (Exception e)

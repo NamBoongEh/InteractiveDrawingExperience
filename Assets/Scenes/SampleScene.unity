@@ -406,9 +406,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   deviceIndex: 0
-  reqWidth: 1920
-  reqHeight: 1080
-  reqFPS: 60
   zoomFactor: 1
   zoomStep: 0
   previewImage: {fileID: 861261069}
@@ -735,9 +732,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: b10339ccdceb56e448832b8e34e74f6c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  ResetSwitch: 0
-  ResetTotalTime: 0
-  resetTime: 120
   log: {fileID: 1341256744}
   udpTextSender: {fileID: 687297669}
   scannerManager: {fileID: 1015108679}

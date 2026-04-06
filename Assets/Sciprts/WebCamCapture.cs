@@ -8,13 +8,6 @@ public class WebCamCapture : MonoBehaviour
 {
     [Header("Camera Settings")]
     public int deviceIndex = 0;
-    [Tooltip("Razer Kiyo V2 X 최대: 1920 (1080p60)\n더 높은 해상도를 시도하려면 직접 입력.")]
-    public int reqWidth  = 1920;
-    public int reqHeight = 1080;
-    [Tooltip("목표 FPS. 0 = OS 자동 선택.\n" +
-             "Razer Kiyo V2 X: 1080p=60fps 지원.\n" +
-             "DirectShow 협상 실패 시 자동으로 FPS=0 으로 재시도.")]
-    public int reqFPS    = 60;
 
     [Header("Digital Zoom")]
     [Range(1f, 5f), Tooltip("디지털 줌 배율. 1=원본, 2=2배 확대. 마우스 스크롤로 조정 가능.")]
@@ -40,10 +33,10 @@ public class WebCamCapture : MonoBehaviour
 
         // 연결된 카메라 전체 목록 출력 (deviceIndex 잘못 설정 시 확인용)
         for (int i = 0; i < devices.Length; i++)
-            Debug.Log($"[WebCam] 감지된 카메라 [{i}]: {devices[i].name}");
+            GameLog.Log($"[WebCam] 감지된 카메라 [{i}]: {devices[i].name}");
 
         string camName = devices[Mathf.Clamp(deviceIndex, 0, devices.Length - 1)].name;
-        Debug.Log($"[WebCam] 선택된 카메라 (deviceIndex={deviceIndex}): {camName}");
+        GameLog.Log($"[WebCam] 선택된 카메라 (deviceIndex={deviceIndex}): {camName}");
         StartCoroutine(StartWithFallback(camName));
     }
 
@@ -66,6 +59,7 @@ public class WebCamCapture : MonoBehaviour
             if (CamTexture != null)
             {
                 CamTexture.Stop();
+                Object.Destroy(CamTexture);
                 CamTexture = null;
                 yield return null;
             }
@@ -89,7 +83,7 @@ public class WebCamCapture : MonoBehaviour
 
             if (CamTexture.width > 16)
             {
-                Debug.Log($"[WebCam] ✓ 실제: {CamTexture.width}×{CamTexture.height}@{CamTexture.requestedFPS}fps  (요청={w}×{h}@{fps})");
+                GameLog.Log($"[WebCam] ✓ 실제: {CamTexture.width}×{CamTexture.height}@{CamTexture.requestedFPS}fps  (요청={w}×{h}@{fps})");
                 yield break;
             }
 
@@ -173,5 +167,13 @@ public class WebCamCapture : MonoBehaviour
         }
     }
 
-    void OnDestroy() => CamTexture?.Stop();
+    void OnDestroy()
+    {
+        if (CamTexture != null)
+        {
+            CamTexture.Stop();
+            Object.Destroy(CamTexture);
+            CamTexture = null;
+        }
+    }
 }
