@@ -457,6 +457,8 @@ public class ArucoDetector : MonoBehaviour
         Cv2.WarpPerspective(frame, rawWarp, M, new OpenCvSharp.Size(warpW, warpH),
                             InterpolationFlags.Lanczos4, BorderTypes.Constant,
                             new Scalar(255, 255, 255, 255));
+
+        SaveDebugMat(rawWarp, "00_rawWarp", fishIndex);
         Debug.Log($"[Warp] ① rawWarp: {rawWarp.Cols}×{rawWarp.Rows}  (fish{fishIndex})");
 
         // ② upscayl-bin 4× AI 업스케일 (백그라운드 스레드, 메인 스레드 비차단)
@@ -589,11 +591,19 @@ public class ArucoDetector : MonoBehaviour
             ApplyInkLineClip(rgba, fishIndex);
 
         // 3차 가공: 방향별 마스크 위치 오프셋 (픽셀 단위 상하좌우 이동)
-        if (maskOffsets != null && fishIndex < maskOffsets.Length)
+        if (maskOffsets == null || fishIndex >= maskOffsets.Length)
+        {
+            Debug.LogWarning($"[MaskOffset] 스킵 — maskOffsets.Length={maskOffsets?.Length ?? 0}, fishIndex={fishIndex}. " +
+                             $"Inspector에서 배열 크기를 {fishIndex + 1} 이상으로 설정하세요.");
+        }
+        else
         {
             var off = maskOffsets[fishIndex].GetOffset(anchorPos);
+            Debug.Log($"[MaskOffset] fish{fishIndex} anchorPos={anchorPos}({s_rotLabels[anchorPos]}) → offset=({off.x},{off.y})");
             if (off.x != 0 || off.y != 0)
                 ShiftAlpha(rgba, off.x, off.y);
+            else
+                Debug.Log($"[MaskOffset] offset이 (0,0)이므로 ShiftAlpha 스킵. 올바른 방향에 값을 입력했는지 확인하세요.");
         }
     }
 
@@ -724,11 +734,17 @@ public class ArucoDetector : MonoBehaviour
             Cv2.BitwiseAnd(drawMask, colorInv, bboxSource);
             SaveDebugMat(bboxSource, "ct_02_bboxsource", fishIndex);
 
-            // ★ drawMask 자체에도 유채색 제거 적용: Close ④ 입력에서 채색 밴드·크로스해칭 배제
-            // 목적: 짙은 채색 영역(어두운 파랑·빨강 밴드)이 Otsu에서 잉크로 잘못 검출되어
-            //       drawMask에 포함되면 Close 후 내부 구조가 비정상 → FillPoly 구멍 발생.
-            //       검정 외곽선(저채도)은 colorInv로 보존, 유채색(고채도)만 제거.
-            Cv2.BitwiseAnd(drawMask, colorInv, drawMask);
+            // drawMask 유채색 제거: 매우 어두운 픽셀(검정 잉크)은 채도와 무관하게 보존
+            // → 외곽선이 채색 영역과 겹쳐도 FloodFill 장벽 픽셀이 유지되어 갭 발생 방지
+            // veryDark: V < inkInkThresh/2 → 진짜 검정 잉크, 밝은 채색 필터에서 면제
+            using Mat vCh        = new Mat();
+            using Mat veryDark   = new Mat();
+            using Mat drawFilter = new Mat();
+            Cv2.ExtractChannel(hsv, vCh, 2);
+            int veryDarkThresh = Mathf.Clamp(inkInkThresh / 2, 20, 60);
+            Cv2.Threshold(vCh, veryDark, veryDarkThresh, 255, ThresholdTypes.BinaryInv);
+            Cv2.BitwiseOr(colorInv, veryDark, drawFilter);  // 저채도 OR 매우어두움 → 보존
+            Cv2.BitwiseAnd(drawMask, drawFilter, drawMask);
             SaveDebugMat(drawMask, "ct_01b_drawmask_clean", fishIndex);
 
             // ── ③ Close: 선 간격 연결 (Open 제거: 선폭≈5px이라 Open이 윤곽선 삭제 위험)
@@ -816,7 +832,7 @@ public class ArucoDetector : MonoBehaviour
 
         // ④ Large Close: 외곽선 간격 연결 (inkDim/40 × 2회)
         using Mat closedBlob = new Mat();
-        using (var ck = CreateEllipseKernel(inkDim, 40))
+        using (var ck = CreateEllipseKernel(inkDim, 10))
             Cv2.MorphologyEx(drawMask, closedBlob, MorphTypes.Close, ck, iterations: 2);
         SaveDebugMat(closedBlob, "ct_02_closed", fishIndex);
 
@@ -1100,6 +1116,18 @@ public class ArucoDetector : MonoBehaviour
             Debug.Log($"[AISeg] ⑥ FishMaskApplier AND 후: {Cv2.CountNonZero(alphaMask)}px");
             SaveDebugMat(alphaMask, "06_after_and", fishIndex);
 
+            // ⑥-a AND 이후 구멍 채우기 (BitwiseNot 없는 정확한 구현)
+            // 문제: ⑤ AISeg_FillHoles(BitwiseNot 방식)가 enclosed hole(눈 등)을 black으로 남김
+            //       → AND(black, template_white) = black → 구멍이 AND 이후에도 살아남음
+            //       → ShiftAlpha 후 구멍 위치가 offset에 따라 그림 몸통 위로 이동 → 보임
+            // 해결: BitwiseNot 없이 filled를 직접 OR → 배경 오염 없이 구멍만 흰색으로 채움
+            if (Cv2.CountNonZero(alphaMask) > 0)
+            {
+                FillHolesAfterAnd(alphaMask);
+                Debug.Log($"[AISeg] ⑥-a AND 후 구멍채우기: {Cv2.CountNonZero(alphaMask)}px");
+                SaveDebugMat(alphaMask, "06a_after_and_holefill", fishIndex);
+            }
+
             // ⑥-b AND 이후 침식: AND가 템플릿 크기를 그대로 반환하는 경우를 보정
             if (aiMaskErodePx > 0)
             {
@@ -1189,7 +1217,9 @@ public class ArucoDetector : MonoBehaviour
 
     // ── 내부 구멍 채우기 ─────────────────────────────────────
     // 이진 마스크에서 외부와 연결되지 않은 검정 영역(구멍)을 흰색으로 채움
-    // 원리: 반전 → 코너 FloodFill(배경 마킹) → 재반전 → OR 병합
+    // 원리: 반전 → 전체 테두리 FloodFill(배경 마킹) → 재반전 → OR 병합
+    // 개선: 4코너 씨드 → 4변 전체 테두리 씨드
+    //       물고기 방향/꼬리 위치에 따라 코너 FloodFill이 배경을 누락하는 문제 해결
     static void AISeg_FillHoles(Mat binaryMask)
     {
         using Mat inv = new Mat();
@@ -1197,14 +1227,60 @@ public class ArucoDetector : MonoBehaviour
 
         using Mat filled = inv.Clone();
         using Mat ffMask = Mat.Zeros(inv.Rows + 2, inv.Cols + 2, MatType.CV_8UC1);
-        // 4코너에서 flood fill → 외부 배경을 검정(0)으로 마킹
-        Cv2.FloodFill(filled, ffMask, new Point(0, 0),                        Scalar.Black);
-        Cv2.FloodFill(filled, ffMask, new Point(inv.Cols - 1, 0),             Scalar.Black);
-        Cv2.FloodFill(filled, ffMask, new Point(0, inv.Rows - 1),             Scalar.Black);
-        Cv2.FloodFill(filled, ffMask, new Point(inv.Cols - 1, inv.Rows - 1),  Scalar.Black);
+
+        // 전체 테두리(4변)에서 흰 픽셀마다 FloodFill → 외부 배경을 검정(0)으로 마킹
+        // 코너 4개만 씨드로 쓸 경우 물고기 몸통/꼬리가 엣지에 닿으면
+        // 고립된 배경 영역을 내부 구멍으로 오인하는 방향 의존 버그를 방지
+        int cols = inv.Cols, rows = inv.Rows;
+        for (int x = 0; x < cols; x++)
+        {
+            if (filled.At<byte>(0, x) == 255)
+                Cv2.FloodFill(filled, ffMask, new Point(x, 0), Scalar.Black);
+            if (filled.At<byte>(rows - 1, x) == 255)
+                Cv2.FloodFill(filled, ffMask, new Point(x, rows - 1), Scalar.Black);
+        }
+        for (int y = 0; y < rows; y++)
+        {
+            if (filled.At<byte>(y, 0) == 255)
+                Cv2.FloodFill(filled, ffMask, new Point(0, y), Scalar.Black);
+            if (filled.At<byte>(y, cols - 1) == 255)
+                Cv2.FloodFill(filled, ffMask, new Point(cols - 1, y), Scalar.Black);
+        }
 
         // 남은 흰 픽셀 = 내부 구멍
         Cv2.BitwiseNot(filled, filled);
+        Cv2.BitwiseOr(binaryMask, filled, binaryMask);
+    }
+
+    // ── AND 이후 구멍 채우기 (BitwiseNot 없는 정확한 구현) ────────
+    // AISeg_FillHoles와 달리 BitwiseNot을 사용하지 않으므로:
+    //   - 배경이 흰색으로 오염되지 않음 (배경 = 검정 유지)
+    //   - enclosed hole만 정확히 흰색으로 채움
+    // AND(all_white_minus_eye, template)로 생긴 눈 구멍 등 처리용
+    static void FillHolesAfterAnd(Mat binaryMask)
+    {
+        using Mat inv = new Mat();
+        Cv2.BitwiseNot(binaryMask, inv);
+
+        using Mat filled = inv.Clone();
+        using Mat ffMask = Mat.Zeros(inv.Rows + 2, inv.Cols + 2, MatType.CV_8UC1);
+        int cols = inv.Cols, rows = inv.Rows;
+        for (int x = 0; x < cols; x++)
+        {
+            if (filled.At<byte>(0, x) == 255)
+                Cv2.FloodFill(filled, ffMask, new Point(x, 0), Scalar.Black);
+            if (filled.At<byte>(rows - 1, x) == 255)
+                Cv2.FloodFill(filled, ffMask, new Point(x, rows - 1), Scalar.Black);
+        }
+        for (int y = 0; y < rows; y++)
+        {
+            if (filled.At<byte>(y, 0) == 255)
+                Cv2.FloodFill(filled, ffMask, new Point(0, y), Scalar.Black);
+            if (filled.At<byte>(y, cols - 1) == 255)
+                Cv2.FloodFill(filled, ffMask, new Point(cols - 1, y), Scalar.Black);
+        }
+        // filled = [fish=black, 배경=black, 구멍=white]
+        // BitwiseNot 없이 직접 OR → 구멍만 흰색, 배경 오염 없음
         Cv2.BitwiseOr(binaryMask, filled, binaryMask);
     }
 
